@@ -73,17 +73,20 @@ Area yang di-subset dari citra full-disk Himawari:
            ▼
 ┌──────────────────────┐
 │ 6. Inference         │  scripts/06_run_inference.py
-│    (forecast nyata)  │  → forecast recursive 18 langkah x 10 menit
+│    (forecast nyata)  │  → forecast recursive 18 langkah x 10 menit,
+│                       │    otomatis pakai timestamp terbaru (atau manual)
 └──────────┬────────────┘
            ▼
 ┌──────────────────────┐
 │ 7. Visualisasi       │  scripts/07_test_visualization.py
-│    (1 frame uji)     │  → render figure 6-panel (cek styling)
+│    (1 frame uji)     │  → render figure 6-panel (cek styling),
+│                       │    otomatis ikut run forecast terakhir
 └──────────┬────────────┘
            ▼
 ┌──────────────────────┐
 │ 8. Animasi Penuh     │  scripts/08_render_animation.py
-│    (GIF 10/30/60 min)│  → animasi GIF untuk tiap interval tampilan
+│    (GIF 10/30/60 min)│  → animasi GIF untuk tiap interval tampilan,
+│                       │    otomatis ikut run forecast terakhir
 └──────────────────────┘
 ```
 
@@ -102,9 +105,9 @@ Bandung-Weather-Forecast-Himawari-09/
     ├── 03b_extract_autoregressive.py # Tahap 3b: ekstraksi fitur AR
     ├── 04_train_models.py          # Tahap 4: training 4 model ML
     ├── 05_recursive_evaluation.py  # Tahap 5: evaluasi multi-step
-    ├── 06_run_inference.py         # Tahap 6: forecast recursive nyata
-    ├── 07_test_visualization.py    # Tahap 7: uji render 1 frame
-    ├── 08_render_animation.py      # Tahap 8: render animasi GIF penuh
+    ├── 06_run_inference.py         # Tahap 6: forecast recursive nyata (otomatis/manual)
+    ├── 07_test_visualization.py    # Tahap 7: uji render 1 frame (otomatis/manual)
+    ├── 08_render_animation.py      # Tahap 8: render animasi GIF penuh (otomatis/manual)
     ├── geojson/
     │   └── KotaBandung.geojson     # Batas administratif kecamatan Bandung
     ├── pipeline/                   # Modul inti (reusable logic)
@@ -140,6 +143,7 @@ Bandung-Weather-Forecast-Himawari-09/
 - Retry otomatis hingga `MAX_RETRY=3` kali dengan reconnect FTP jika gagal.
 - Notifikasi real-time ke **Telegram** (opsional) tiap direktori selesai diproses atau saat terjadi error file.
 - Logging lengkap ke `download_activity.log`.
+- **Satu-satunya tahap yang benar-benar incremental** — file yang sudah pernah diperiksa tidak diproses ulang. Tahap 2 s/d 5 selalu memproses **ulang seluruh isi folder data** setiap dijalankan (lihat catatan di bagian [Catatan Teknis](#-catatan-teknis)).
 
 ### Tahap 2 — Eksplorasi Data (`02_explore_data.py`)
 
@@ -160,6 +164,8 @@ Mengubah rangkaian frame CTT (time-series citra) menjadi **dataset supervised pe
      - `doy_sin/cos` dari hari-dalam-tahun (periode 365.25 hari)
    - Untuk **setiap piksel** di grid (5×7), buat satu baris berisi: koordinat piksel, lat/lon, fitur waktu, seluruh 10 kanal pada 3 titik lag, dan nilai target `tbb_13`.
 3. Simpan sebagai `dataset/features_{interval}min.csv` untuk masing-masing interval.
+
+> ⚠️ Tahap ini melakukan **full rebuild** dari nol setiap dijalankan (bukan menambah baris ke file lama) — dia scan ulang seluruh folder data (`.nc`) yang ada dan menimpa CSV lama. Kalau ada data `.nc` baru, jalankan ulang tahap ini (dan seterusnya) supaya ikut terangkum.
 
 ### Tahap 3b — Ekstraksi Fitur Autoregressive (`03b_extract_autoregressive.py`)
 
@@ -192,6 +198,7 @@ Disimpan sebagai `dataset/features_{interval}min_ar.csv`.
 - Evaluasi pada test set memakai **MAE**, **RMSE**, dan **R²**.
 - Model + scaler disimpan ke `models/{interval}min/{model_name}.joblib`.
 - Ringkasan seluruh kombinasi model×interval disimpan ke `models/training_summary.csv`.
+- Seperti Tahap 3a, ini juga **full rebuild** — semua model dilatih ulang dari nol memakai seluruh dataset yang tersedia saat itu.
 
 ### Tahap 5 — Evaluasi Recursive Multi-Step (`05_recursive_evaluation.py` + `pipeline/recursive_eval.py`)
 
@@ -209,7 +216,19 @@ Model di Tahap 4 hanya dievaluasi untuk **satu langkah ke depan**. Tahap ini men
 - **`get_initial_windows`**: mengambil kondisi awal (`[tm2, tm1, t]`) untuk **seluruh piksel sekaligus** pada satu `t0` yang ditentukan pengguna.
 - **`run_recursive_forecast`**: menjalankan forecast recursive secara **batch** (semua piksel diproses bersamaan tiap langkah, bukan satu per satu) sepanjang 18 langkah × 10 menit = 3 jam, sambil menyertakan nilai aktual (jika tersedia) untuk pembanding.
 - **`filter_forecast_by_interval`**: dari hasil resolusi penuh 10 menit, diturunkan versi tampilan 30 dan 60 menit tanpa perlu model terpisah — cukup mengambil kelipatan langkah yang sesuai.
-- Output disimpan ke `forecast_output/forecast_{timestamp}_full10min.csv` dan varian `_display{30,60}min.csv`.
+
+**Mode penentuan titik awal (`T0_STR`):**
+- **Otomatis (default, `T0_STR = None`)** — otomatis memakai `base_time` **TERBARU** yang tersedia di `features_10min_ar.csv`. Tidak perlu edit file sama sekali untuk forecast dari data terbaru.
+- **Manual** — isi `T0_STR` dengan timestamp tertentu (UTC), harus ada di kolom `base_time` di `features_10min_ar.csv`, kalau mau forecast dari tanggal/jam spesifik (bukan yang terbaru).
+
+**Output & state run:**
+- Tiap run disimpan di **subfolder tersendiri** berdasarkan timestamp `t0` (format `YYYYMMDD_HHMM`), supaya hasil dari run yang berbeda-beda tidak saling menumpuk/menimpa:
+  ```
+  forecast_output/20260705_1000/full10min.csv
+  forecast_output/20260705_1000/display30min.csv
+  forecast_output/20260705_1000/display60min.csv
+  ```
+- Info run terakhir (t0, folder, nama file) disimpan ke `forecast_output/last_run_state.json` — dipakai otomatis oleh Tahap 7 & 8 supaya keduanya selalu ikut run forecast yang paling terakhir dijalankan, tanpa perlu isi ulang nama file/timestamp secara manual.
 
 > ⚠️ Timestamp data (`T0_STR`) menggunakan **UTC**, bukan WIB. Tambahkan 7 jam untuk tampilan waktu Indonesia Barat.
 
@@ -231,9 +250,27 @@ Detail teknis render:
 - Batas kecamatan Kota Bandung digambar dari `geojson/KotaBandung.geojson` (`geopandas`), lengkap dengan label 11 kecamatan.
 - Judul figure menampilkan MAE dan skor akurasi (`100 × (1 - MAE/rentang_CTT_aktual)`) bila data aktual tersedia.
 
+**Mode otomatis/manual:** sama seperti Tahap 6, `T0_STR` & `FORECAST_CSV` bisa dikosongkan (`None`) untuk otomatis membaca `forecast_output/last_run_state.json` (run terakhir), atau diisi manual kalau mau cek hasil forecast lama. `STEP_TO_RENDER` (frame mana yang mau dirender) tetap selalu manual.
+
+**Output** disimpan di subfolder sesuai timestamp `t0`, misalnya:
+```
+visualizations/20260705_1000/test_frame_step18.png
+```
+
 ### Tahap 8 — Render Animasi Penuh (`08_render_animation.py`)
 
-- Untuk tiap interval tampilan (10/30/60 menit), me-render seluruh frame sepanjang horizon 3 jam menjadi PNG (disimpan di `visualizations/frames/`), lalu digabung menjadi **GIF** (`visualizations/{interval}_menit.gif`) menggunakan `Pillow`, dengan durasi antar-frame 700ms.
+- Untuk tiap interval tampilan (10/30/60 menit), me-render seluruh frame sepanjang horizon 3 jam menjadi PNG, lalu digabung menjadi **GIF** menggunakan `Pillow`, dengan durasi antar-frame 700ms.
+- **Independen dari Tahap 7** — tidak memakai frame yang sudah dibuat `07_test_visualization.py`. Tahap 7 hanya untuk preview cepat 1 frame (cek styling); Tahap 8 me-render ulang semua frame yang dibutuhkan dari nol untuk animasi penuh.
+
+**Mode otomatis/manual:** sama seperti Tahap 6 & 7, `T0_STR` & `FORECAST_CSV` otomatis mengikuti `last_run_state.json` (run terakhir) kalau dikosongkan.
+
+**Output** disimpan di subfolder sesuai timestamp `t0`, misalnya:
+```
+visualizations/20260705_1000/frames/10min_step01.png
+visualizations/20260705_1000/10_menit.gif
+visualizations/20260705_1000/30_menit.gif
+visualizations/20260705_1000/60_menit.gif
+```
 
 ---
 
@@ -291,16 +328,21 @@ python 04_train_models.py
 # Tahap 5: evaluasi recursive multi-step, pilih model terbaik
 python 05_recursive_evaluation.py
 
-# Tahap 6: jalankan forecast 3 jam dari satu titik waktu awal
-#   (ubah T0_STR di dalam file sesuai timestamp yang tersedia)
+# Tahap 6: jalankan forecast 3 jam
+#   Default: otomatis pakai base_time TERBARU, tidak perlu edit apa pun.
+#   Opsional: isi T0_STR di dalam file kalau mau forecast dari timestamp tertentu.
 python 06_run_inference.py
 
 # Tahap 7 (opsional): uji render satu frame
+#   Otomatis ikut hasil forecast terakhir dari Tahap 6 (last_run_state.json)
 python 07_test_visualization.py
 
 # Tahap 8: render animasi GIF penuh untuk semua interval
+#   Otomatis ikut hasil forecast terakhir dari Tahap 6 (last_run_state.json)
 python 08_render_animation.py
 ```
+
+> 💡 Kalau nanti menambah data `.nc` baru: cukup ulangi dari Tahap 1 (atau 3a kalau data sudah ada) sampai Tahap 8. Tahap 3a–5 selalu memproses ulang seluruh data dari nol (bukan incremental), jadi tidak perlu langkah tambahan khusus selain menjalankan urutan yang sama.
 
 ## 📤 Output yang Dihasilkan
 
@@ -310,8 +352,8 @@ python 08_render_animation.py
 | `_metadata/` | Log file yang sudah diperiksa/diproses (untuk resume) |
 | `dataset/` | CSV fitur (`features_{interval}min.csv`, `features_{interval}min_ar.csv`) |
 | `models/` | Model terlatih (`.joblib`), scaler SVR, `training_summary.csv`, `recursive_evaluation.csv` |
-| `forecast_output/` | Hasil forecast recursive (`forecast_{timestamp}_full10min.csv`, `_display{30,60}min.csv`) |
-| `visualizations/` | Frame PNG 6-panel & animasi GIF per interval |
+| `forecast_output/` | `last_run_state.json` (info run terakhir) + subfolder per-timestamp `{YYYYMMDD_HHMM}/` berisi `full10min.csv`, `display30min.csv`, `display60min.csv` |
+| `visualizations/` | Subfolder per-timestamp `{YYYYMMDD_HHMM}/` berisi frame PNG 6-panel, animasi GIF per interval, dan folder `frames/` (PNG mentah animasi) |
 | `download_activity.log` | Log proses download |
 
 ## 📝 Catatan Teknis
@@ -320,4 +362,6 @@ python 08_render_animation.py
 - **Ukuran grid**: area Bandung yang di-subset menghasilkan grid kecil (~5×7 piksel) sesuai resolusi native Himawari-9 di area tersebut — karena itu peta divisualisasikan dengan interpolasi upsampling agar tampak halus, bukan karena resolusi model yang tinggi.
 - **Pendekatan model**: per-piksel + autoregressive, **bukan** model spasial (mis. CNN/ConvLSTM) — setiap piksel diprediksi independen berdasarkan riwayat waktunya sendiri, lat/lon, dan fitur musiman/harian.
 - **Pemilihan model final** dilakukan otomatis berdasarkan performa recursive (multi-step), bukan cuma performa satu langkah — ini penting karena error cenderung terakumulasi pada forecast recursive jangka panjang.
-- Proyek tampaknya ditujukan sebagai alat bantu **peringatan dini potensi hujan/genangan** di Kota Bandung (lihat kategori "Kelas Awan" dan "Risk Banjir" pada visualisasi).
+- **Incremental vs full-rebuild**: hanya Tahap 1 (download) yang incremental (resume otomatis via `FileTracker`). Tahap 3a, 3b, 4, dan 5 selalu memproses ulang **seluruh** data yang ada di folder setiap dijalankan (bukan menambah ke file lama) — jadi waktu proses akan bertambah seiring makin banyak data yang terkumpul.
+- **Run forecast (Tahap 6–8) tidak saling menimpa**: setiap kombinasi timestamp `t0` punya subfolder sendiri di `forecast_output/` dan `visualizations/`, jadi hasil forecast dari tanggal berbeda-beda bisa disimpan berdampingan tanpa perlu diganti nama manual.
+- Proyek tampaknya ditujukan sebagai alat bantu **peringatan dini potensi hujan/genangan** di Kota Bandung (lihat kategori "Kelas Awan" dan "Risk Banjir" pada visualisasi). Perlu dicatat: `tbb_13` adalah **proxy suhu awan**, bukan pengukuran curah hujan langsung — untuk validasi/skala yang lebih rigor terhadap kejadian hujan aktual, disarankan menyandingkan dengan data hujan observasi (mis. GSMaP, GPM IMERG, atau data BMKG).
