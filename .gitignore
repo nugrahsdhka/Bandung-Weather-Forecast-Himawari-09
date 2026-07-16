@@ -1,0 +1,56 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Virtual Environment
+.venv/
+venv/
+env/
+ENV/
+
+# Environment Variables
+.env
+.env.*
+!.env.example
+
+# IDE / Editor
+.vscode/
+.idea/
+
+# OS Files
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Python Testing / Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+
+# Training Output
+catboost_info/
+
+# Models
+models/
+
+# Processed Dataset
+dataset/
+
+# Downloaded NetCDF Data
+data_bandung/
+
+# Generated Metadata
+_metadata/
+
+# Forecast Results
+forecast_output/
+
+# Visualization Output
+visualizations/
