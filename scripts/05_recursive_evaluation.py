@@ -1,5 +1,5 @@
 # 05_recursive_evaluation.py
-
+# Melakukan evaluasi recursive multi-step forecasting terhadap seluruh model machine learning pada horizon prediksi 3 jam menggunakan metrik MAE.
 
 import os
 import joblib
