@@ -1,19 +1,8 @@
 # 06_run_inference.py
-#
-# Tahap 5: Inference / prediksi.
-# Pilih model terbaik (otomatis, berdasarkan hasil Tahap 4), jalankan
-# forecast recursive 3 jam penuh (18 langkah x 10 menit) dari satu
-# timestamp awal, lalu simpan hasilnya -- baik versi lengkap (resolusi
-# 10 menit) maupun versi yang sudah disaring untuk tampilan 30/60 menit.
-#
-# GANTI T0_STR di bawah sesuai timestamp yang mau dijadikan titik awal
-# forecast. Harus timestamp yang ada di features_10min_ar.csv (base_time).
-# Timestamp di data ini dalam UTC (bukan WIB) -- lihat catatan di akhir output.
-#
-# Jalankan dari folder scripts/:
-#   python 06_run_inference.py
+# Menjalankan proses inference recursive forecasting selama 3 jam menggunakan model terbaik dan menyimpan hasil prediksi untuk visualisasi.
 
 import os
+import json
 import joblib
 import pandas as pd
 
@@ -28,8 +17,8 @@ from pipeline.inference import (
     filter_forecast_by_interval,
 )
 
-# ==== GANTI SESUAI KEBUTUHAN ====
-T0_STR = "2026-07-05 10:00:00"   # timestamp awal forecast (UTC), harus ada di features_10min_ar.csv
+# ==== GANTI SESUAI KEBUTUHAN (opsional) ====
+T0_STR = "2026-01-04 00:20:00"   # None = otomatis pakai base_time TERBARU di features_10min_ar.csv
 BASE_INTERVAL_MINUTES = 10
 HORIZON_MINUTES = 180
 MODEL_NAMES = ["svr", "xgboost", "lightgbm", "catboost"]
@@ -41,8 +30,8 @@ def main():
     cfg = load_config()
     dataset_dir = os.path.join(cfg.PROJECT_ROOT, "dataset")
     models_dir = os.path.join(cfg.PROJECT_ROOT, "models")
-    output_dir = os.path.join(cfg.PROJECT_ROOT, "forecast_output")
-    os.makedirs(output_dir, exist_ok=True)
+    root_output_dir = os.path.join(cfg.PROJECT_ROOT, "forecast_output")
+    os.makedirs(root_output_dir, exist_ok=True)
 
     banner("INFERENCE - FORECAST RECURSIVE 3 JAM")
 
@@ -57,13 +46,21 @@ def main():
     scaler_path = os.path.join(interval_dir, f"{best_model_name}_scaler.joblib")
     scaler = joblib.load(scaler_path) if os.path.exists(scaler_path) else None
 
-    say_info(f"Memuat dataset 10 menit untuk titik awal & ground-truth lookup ...")
+    say_info("Memuat dataset 10 menit untuk titik awal & ground-truth lookup ...")
     df10 = load_ar_dataset(os.path.join(dataset_dir, "features_10min_ar.csv"))
     lookup = build_ground_truth_lookup(df10)
     hr()
 
-    t0 = pd.to_datetime(T0_STR)
-    say_info(f"Titik awal forecast: {t0} (UTC)")
+    if T0_STR is None:
+        t0 = df10["base_time"].max()
+        say_info(f"T0_STR tidak diisi -> otomatis pakai base_time TERBARU: {t0} (UTC)")
+    else:
+        t0 = pd.to_datetime(T0_STR)
+        say_info(f"Titik awal forecast: {t0} (UTC)")
+
+    t0_tag = t0.strftime("%Y%m%d_%H%M")
+    output_dir = os.path.join(root_output_dir, t0_tag)
+    os.makedirs(output_dir, exist_ok=True)
 
     try:
         windows = get_initial_windows(df10, t0)
@@ -83,7 +80,7 @@ def main():
     say_ok(f"Forecast selesai: {len(forecast_df)} baris ({n_steps} langkah x {len(windows)} pixel)")
     hr()
 
-    full_path = os.path.join(output_dir, f"forecast_{t0.strftime('%Y%m%d_%H%M')}_full10min.csv")
+    full_path = os.path.join(output_dir, "full10min.csv")
     forecast_df.to_csv(full_path, index=False)
     say_ok(f"Disimpan (resolusi penuh 10 menit): {full_path}")
 
@@ -91,11 +88,22 @@ def main():
         if disp_interval == BASE_INTERVAL_MINUTES:
             continue
         sub_df = filter_forecast_by_interval(forecast_df, disp_interval, BASE_INTERVAL_MINUTES)
-        sub_path = os.path.join(
-            output_dir, f"forecast_{t0.strftime('%Y%m%d_%H%M')}_display{disp_interval}min.csv"
-        )
+        sub_path = os.path.join(output_dir, f"display{disp_interval}min.csv")
         sub_df.to_csv(sub_path, index=False)
         say_ok(f"Disimpan (tampilan {disp_interval} menit, {len(sub_df)} baris): {sub_path}")
+
+    state = {
+        "t0": t0.strftime("%Y-%m-%d %H:%M:%S"),
+        "t0_tag": t0_tag,
+        "base_interval_minutes": BASE_INTERVAL_MINUTES,
+        "horizon_minutes": HORIZON_MINUTES,
+        "display_intervals": DISPLAY_INTERVALS,
+        "forecast_csv_full10min": os.path.join(t0_tag, "full10min.csv"),
+    }
+    state_path = os.path.join(root_output_dir, "last_run_state.json")
+    with open(state_path, "w") as f:
+        json.dump(state, f, indent=2)
+    say_ok(f"State run disimpan: {state_path} (dipakai otomatis oleh 07 & 08)")
 
     gap()
     banner("SELESAI")
