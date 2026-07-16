@@ -1,6 +1,8 @@
 # 08_render_animation.py
+# Merender animasi GIF enam panel dari hasil recursive forecasting pada interval tampilan 10, 30, dan 60 menit.
 
 import os
+import json
 import pandas as pd
 from PIL import Image
 
@@ -9,15 +11,26 @@ from pipeline.config import load_config
 from pipeline.model_training import load_ar_dataset
 from pipeline.visualization import render_six_panel, pivot_grid, get_axis_arrays
 
-# ==== GANTI SESUAI KEBUTUHAN ====
-T0_STR = "2026-07-05 10:00:00"                          # harus sama dengan T0_STR di 06_run_inference.py
-FORECAST_CSV = "forecast_20260705_1000_full10min.csv"   # file hasil Tahap 5 (resolusi penuh 10 menit)
+# ==== GANTI SESUAI KEBUTUHAN (opsional) ====
+T0_STR = None          # None = otomatis dari last_run_state.json (hasil run 06 terakhir)
+FORECAST_CSV = None    # None = otomatis dari last_run_state.json
 DISPLAY_INTERVALS = [10, 30, 60]
 TZ_OFFSET_HOURS = 7                                      # UTC -> WIB
 FRAME_DURATION_MS = 700                                  # kecepatan animasi (ms per frame)
 BASE_INTERVAL_MINUTES = 10
 HORIZON_MINUTES = 180
 # =================================
+
+
+def load_last_run_state(root_output_dir):
+    state_path = os.path.join(root_output_dir, "last_run_state.json")
+    if not os.path.exists(state_path):
+        raise FileNotFoundError(
+            f"{state_path} tidak ditemukan. Jalankan 06_run_inference.py dulu, "
+            "atau isi T0_STR & FORECAST_CSV secara manual di atas."
+        )
+    with open(state_path) as f:
+        return json.load(f)
 
 
 def get_steps_for_interval(display_interval, base_interval=BASE_INTERVAL_MINUTES, max_step=None):
@@ -29,14 +42,25 @@ def get_steps_for_interval(display_interval, base_interval=BASE_INTERVAL_MINUTES
 def main():
     cfg = load_config()
     dataset_dir = os.path.join(cfg.PROJECT_ROOT, "dataset")
-    output_dir = os.path.join(cfg.PROJECT_ROOT, "forecast_output")
-    viz_dir = os.path.join(cfg.PROJECT_ROOT, "visualizations")
-    frames_dir = os.path.join(viz_dir, "frames")
-    os.makedirs(frames_dir, exist_ok=True)
+    root_output_dir = os.path.join(cfg.PROJECT_ROOT, "forecast_output")
+    root_viz_dir = os.path.join(cfg.PROJECT_ROOT, "visualizations")
 
     banner("RENDER ANIMASI PENUH")
 
-    forecast_path = os.path.join(output_dir, FORECAST_CSV)
+    t0_str, forecast_csv = T0_STR, FORECAST_CSV
+    if t0_str is None or forecast_csv is None:
+        state = load_last_run_state(root_output_dir)
+        t0_str = t0_str or state["t0"]
+        forecast_csv = forecast_csv or state["forecast_csv_full10min"]
+        say_info(f"Otomatis pakai run terakhir: t0={t0_str}, file={forecast_csv}")
+
+    t0 = pd.to_datetime(t0_str)
+    t0_tag = t0.strftime("%Y%m%d_%H%M")
+    viz_dir = os.path.join(root_viz_dir, t0_tag)
+    frames_dir = os.path.join(viz_dir, "frames")
+    os.makedirs(frames_dir, exist_ok=True)
+
+    forecast_path = os.path.join(root_output_dir, forecast_csv)
     if not os.path.exists(forecast_path):
         say_error(f"File tidak ditemukan: {forecast_path}")
         return
@@ -46,7 +70,6 @@ def main():
 
     say_info("Memuat kondisi awal (input t0) dari features_10min_ar.csv ...")
     df10 = load_ar_dataset(os.path.join(dataset_dir, "features_10min_ar.csv"))
-    t0 = pd.to_datetime(T0_STR)
     initial_df = df10[df10["base_time"] == t0][["pixel_row", "pixel_col", "lat", "lon", "tbb_13_t"]].reset_index(drop=True)
     if initial_df.empty:
         say_error(f"Tidak ada data awal untuk t0={t0}")
@@ -105,7 +128,7 @@ def main():
 
     gap()
     banner("SELESAI")
-    say_info("Semua animasi ada di folder visualizations/ (frame PNG mentah ada di visualizations/frames/).")
+    say_info(f"Semua animasi ada di folder {viz_dir}/ (frame PNG mentah ada di {frames_dir}/).")
 
 
 if __name__ == "__main__":
