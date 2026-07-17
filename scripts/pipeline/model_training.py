@@ -23,11 +23,7 @@ def load_ar_dataset(path):
 
 
 def chronological_split(df, test_frac=0.15, time_col="base_time"):
-    """
-    Split train/test berdasarkan urutan waktu (BUKAN random), supaya tidak
-    ada kebocoran informasi masa depan ke training. Semua baris (lintas
-    pixel) pada satu base_time yang sama selalu masuk ke sisi yang sama.
-    """
+    """Split train/test berdasarkan urutan waktu tanpa random; semua baris dengan base_time yang sama masuk ke sisi yang sama."""
     unique_times = sorted(df[time_col].unique())
     cutoff_idx = int(len(unique_times) * (1 - test_frac))
     cutoff_time = unique_times[cutoff_idx]
