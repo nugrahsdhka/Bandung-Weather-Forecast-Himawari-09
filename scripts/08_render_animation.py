@@ -14,6 +14,7 @@ from pipeline.visualization import render_six_panel, pivot_grid, get_axis_arrays
 # ==== GANTI SESUAI KEBUTUHAN (opsional) ====
 T0_STR = None          # None = otomatis dari last_run_state.json (hasil run 06 terakhir)
 FORECAST_CSV = None    # None = otomatis dari last_run_state.json
+MODEL_NAME = None      # None = otomatis dari last_run_state.json (dipakai buat nama folder viz, mis. "_svr")
 DISPLAY_INTERVALS = [10, 30, 60]
 TZ_OFFSET_HOURS = 7                                      # UTC -> WIB
 FRAME_DURATION_MS = 700                                  # kecepatan animasi (ms per frame)
@@ -47,15 +48,17 @@ def main():
 
     banner("RENDER ANIMASI PENUH")
 
-    t0_str, forecast_csv = T0_STR, FORECAST_CSV
+    t0_str, forecast_csv, model_name = T0_STR, FORECAST_CSV, MODEL_NAME
     if t0_str is None or forecast_csv is None:
         state = load_last_run_state(root_output_dir)
         t0_str = t0_str or state["t0"]
         forecast_csv = forecast_csv or state["forecast_csv_full10min"]
-        say_info(f"Otomatis pakai run terakhir: t0={t0_str}, file={forecast_csv}")
+        model_name = model_name or state.get("model_name")
+        say_info(f"Otomatis pakai run terakhir: t0={t0_str}, model={model_name}, file={forecast_csv}")
 
     t0 = pd.to_datetime(t0_str)
-    t0_tag = t0.strftime("%Y%m%d_%H%M")
+    tag_suffix = f"_{model_name}" if model_name else ""
+    t0_tag = t0.strftime("%Y%m%d_%H%M") + tag_suffix
     viz_dir = os.path.join(root_viz_dir, t0_tag)
     frames_dir = os.path.join(viz_dir, "frames")
     os.makedirs(frames_dir, exist_ok=True)

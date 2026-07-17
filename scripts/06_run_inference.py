@@ -21,7 +21,6 @@ from pipeline.inference import (
 T0_STR = "2026-01-04 00:20:00"   # None = otomatis pakai base_time TERBARU di features_10min_ar.csv
 BASE_INTERVAL_MINUTES = 10
 HORIZON_MINUTES = 180
-MODEL_NAMES = ["svr", "xgboost", "lightgbm", "catboost"]
 DISPLAY_INTERVALS = [10, 30, 60]
 # =================================
 
@@ -36,7 +35,7 @@ def main():
     banner("INFERENCE - FORECAST RECURSIVE 3 JAM")
 
     say_info("Memilih model terbaik berdasarkan hasil Tahap 4 (recursive_evaluation.csv) ...")
-    best_model_name, avg_mae_table = select_best_model(models_dir, BASE_INTERVAL_MINUTES, MODEL_NAMES)
+    best_model_name, avg_mae_table = select_best_model(models_dir, BASE_INTERVAL_MINUTES, cfg.MODEL_NAMES)
     say_ok(f"Model terpilih: {best_model_name}")
     print(avg_mae_table.to_string())
     hr()
@@ -58,7 +57,7 @@ def main():
         t0 = pd.to_datetime(T0_STR)
         say_info(f"Titik awal forecast: {t0} (UTC)")
 
-    t0_tag = t0.strftime("%Y%m%d_%H%M")
+    t0_tag = t0.strftime("%Y%m%d_%H%M") + f"_{best_model_name}"
     output_dir = os.path.join(root_output_dir, t0_tag)
     os.makedirs(output_dir, exist_ok=True)
 
@@ -95,6 +94,7 @@ def main():
     state = {
         "t0": t0.strftime("%Y-%m-%d %H:%M:%S"),
         "t0_tag": t0_tag,
+        "model_name": best_model_name,
         "base_interval_minutes": BASE_INTERVAL_MINUTES,
         "horizon_minutes": HORIZON_MINUTES,
         "display_intervals": DISPLAY_INTERVALS,

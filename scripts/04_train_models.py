@@ -15,8 +15,6 @@ from pipeline.model_training import (
     evaluate,
 )
 
-INTERVALS_MINUTES = [10, 30, 60]
-MODEL_NAMES = ["svr", "xgboost", "lightgbm", "catboost"]
 TEST_FRAC = 0.15
 
 
@@ -34,7 +32,7 @@ def main():
 
     summary_rows = []
 
-    for interval in INTERVALS_MINUTES:
+    for interval in cfg.INTERVALS_MINUTES:
         gap()
         banner(f"INTERVAL {interval} MENIT")
 
@@ -56,7 +54,7 @@ def main():
         interval_dir = os.path.join(models_dir, f"{interval}min")
         os.makedirs(interval_dir, exist_ok=True)
 
-        for model_name in MODEL_NAMES:
+        for model_name in cfg.MODEL_NAMES:
             say_info(f"Melatih {model_name} ...")
             try:
                 model, scaler, elapsed = train_one_model(model_name, X_train, y_train)

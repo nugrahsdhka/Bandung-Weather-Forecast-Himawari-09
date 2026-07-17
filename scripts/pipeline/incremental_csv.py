@@ -1,5 +1,8 @@
 # ./scripts/pipeline/incremental_csv.py
-# Utilitas bersama untuk menulis CSV secara incremental dengan aman: atomic write, fast-path kalau data baru kronologis, guard terhadap file yang korup/setengah-jalan (misal akibat proses lama yang diinterupsi sebelum modul ini ada), dan backup otomatis saat mode --rebuild dipakai.
+# Utilitas bersama untuk menulis CSV secara incremental dengan aman: atomic write,
+# fast-path kalau data baru kronologis, guard terhadap file yang korup/setengah-jalan
+# (misal akibat proses lama yang diinterupsi sebelum modul ini ada), dan backup
+# otomatis saat mode --rebuild dipakai.
 
 import os
 import shutil
@@ -16,31 +19,14 @@ class CorruptDatasetError(Exception):
 
 
 def atomic_write_csv(df, out_path):
-    """
-    Tulis DataFrame ke CSV secara atomik: tulis dulu ke file sementara di folder yang
-    sama, baru di-rename ke nama aslinya. `os.replace()` di Python itu atomik baik di
-    POSIX maupun Windows (beda dengan os.rename yg di Windows bisa gagal kalau file
-    tujuan sudah ada) -- jadi kalau proses diinterupsi (Ctrl+C, mati listrik, crash)
-    persis saat menulis, file ASLI tidak akan pernah dalam kondisi setengah tertulis:
-    yang ada cuma file .tmp yang gagal/tidak lengkap, sedangkan file asli tetap versi
-    lama yang utuh.
-    """
+    """Tulis DataFrame ke CSV secara atomik menggunakan file sementara dan `os.replace()`, sehingga file asli tidak pernah rusak atau setengah tertulis jika proses terhenti."""
     tmp_path = out_path + ".tmp"
     df.to_csv(tmp_path, index=False)
     os.replace(tmp_path, out_path)
 
 
 def validate_existing_file(path, dedup_cols, sort_col, parse_dates):
-    """
-    Guard terhadap file lama yang korup/tidak konsisten -- misal karena run lama
-    (sebelum atomic write dipakai) sempat diinterupsi di tengah penulisan, atau
-    file diedit manual. Dua hal yang dicek:
-      1. Tidak ada baris duplikat pada `dedup_cols` (mis. base_time+pixel_row+pixel_col).
-      2. Kolom `sort_col` (base_time) terurut naik -- ini jadi prasyarat supaya
-         fast-path kronologis di `append_incremental` aman dipakai.
-    Kalau salah satu gagal, lempar CorruptDatasetError dengan pesan yang jelas
-    (bukan diam-diam lanjut memproses data yang berpotensi tidak konsisten).
-    """
+    """Validasi dataset agar bebas duplikasi dan tetap terurut, lalu lempar `CorruptDatasetError` jika file korup atau tidak konsisten."""
     if not os.path.exists(path):
         return
 
@@ -73,18 +59,7 @@ def validate_existing_file(path, dedup_cols, sort_col, parse_dates):
 
 
 def append_incremental(df_new, out_path, dedup_cols, sort_cols, sort_col, parse_dates):
-    """
-    Tambahkan `df_new` ke `out_path` dengan aman:
-      - File belum ada          -> tulis baru (terurut), atomik.
-      - Data baru kronologis    -> FAST-PATH: langsung append di akhir file tanpa
-                                    baca-ulang+sort seluruh isi file (murah & cepat).
-                                    "Kronologis" berarti sort_col minimum di df_new >=
-                                    sort_col maksimum yang sudah ada di file.
-      - Data baru TIDAK kronologis (mis. mengisi gap lama) -> baca ulang seluruh file,
-                                    gabung, sort ulang, tulis atomik (lebih mahal, tapi
-                                    hasil tetap terurut rapi).
-    Return: total baris di file setelah operasi ini.
-    """
+    """Tambahkan `df_new` ke `out_path` secara aman dengan append cepat untuk data kronologis atau merge-sort atomik bila diperlukan, lalu kembalikan total baris hasil akhir."""
     file_exists = os.path.exists(out_path)
 
     if not file_exists:
@@ -99,12 +74,6 @@ def append_incremental(df_new, out_path, dedup_cols, sort_cols, sort_col, parse_
     if chronological:
         # Fast-path: tidak perlu baca+sort seluruh file lama.
         df_new_sorted = df_new.sort_values(sort_cols).reset_index(drop=True)
-        # Tulis baris baru ke buffer teks sekali jalan, lalu satu kali write() ke file
-        # dalam mode append -- meminimalkan jumlah operasi tulis terpisah supaya jendela
-        # risiko interupsi (Ctrl+C dsb) menulis baris rusak jadi sekecil mungkin.
-        # (Ini bukan atomik 100% seperti rewrite penuh, tapi risikonya cuma baris
-        # terakhir yang berpotensi rusak -- dan itu akan langsung ketahuan lewat
-        # validate_existing_file() di run berikutnya, bukan korupsi diam-diam.)
         csv_text = df_new_sorted.to_csv(index=False, header=False)
         with open(out_path, "a", newline="", encoding="utf-8") as f:
             f.write(csv_text)
@@ -122,11 +91,7 @@ def append_incremental(df_new, out_path, dedup_cols, sort_cols, sort_col, parse_
 
 
 def backup_and_clear(path, reason="rebuild"):
-    """
-    Untuk mode --rebuild: JANGAN hapus file lama begitu saja -- pindahkan (backup) dulu
-    ke folder `_backup_YYYYMMDD_HHMMSS/` di direktori yang sama, supaya kalau --rebuild
-    dipanggil tidak sengaja, data lama tidak hilang permanen.
-    """
+    """Untuk mode `--rebuild`, pindahkan file lama ke folder backup bertimestamp sebelum membuat ulang dataset."""
     if not os.path.exists(path):
         return None
 

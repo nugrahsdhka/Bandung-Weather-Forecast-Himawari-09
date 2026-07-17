@@ -11,8 +11,6 @@ from pipeline.config import load_config
 from pipeline.model_training import load_ar_dataset, chronological_split
 from pipeline.recursive_eval import build_ground_truth_lookup, select_start_points, recursive_predict
 
-INTERVALS_MINUTES = [10, 30, 60]
-MODEL_NAMES = ["svr", "xgboost", "lightgbm", "catboost"]
 HORIZON_MINUTES = 180
 TEST_FRAC = 0.15
 MAX_START_POINTS = 200  # batasi jumlah titik awal biar evaluasi tidak kelamaan
@@ -33,7 +31,7 @@ def main():
 
     all_results = []
 
-    for interval in INTERVALS_MINUTES:
+    for interval in cfg.INTERVALS_MINUTES:
         gap()
         banner(f"INTERVAL {interval} MENIT")
 
@@ -57,7 +55,7 @@ def main():
 
         interval_dir = os.path.join(models_dir, f"{interval}min")
 
-        for model_name in MODEL_NAMES:
+        for model_name in cfg.MODEL_NAMES:
             model_path = os.path.join(interval_dir, f"{model_name}.joblib")
             if not os.path.exists(model_path):
                 say_error(f"Model tidak ditemukan: {model_path}, dilewati.")

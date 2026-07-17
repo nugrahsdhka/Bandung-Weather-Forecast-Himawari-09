@@ -48,6 +48,13 @@ class Config:
     # Kanal infrared Himawari
     TBB_CHANNELS = [f"tbb_{i:02d}" for i in range(7, 17)]  # tbb_07 ... tbb_16
 
+    # Model ML yang dipakai di Tahap 4 (training), 5 (evaluasi recursive), 6 (inference).
+    # Ubah di sini saja kalau mau menambah/mengurangi model -- otomatis konsisten di ketiganya.
+    MODEL_NAMES = ["xgboost", "lightgbm", "catboost"]
+
+    # Interval prediksi (menit) yang dipakai di Tahap 3a, 3b, 4, 5.
+    INTERVALS_MINUTES = [10, 30, 60]
+
     @classmethod
     def validate(cls):
         """Validasi semua env var wajib terisi, dan laporkan nama-nama yang belum diisi."""
