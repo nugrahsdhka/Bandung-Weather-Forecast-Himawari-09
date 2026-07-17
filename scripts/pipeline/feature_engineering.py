@@ -29,13 +29,37 @@ def scan_timestamp_index(final_base_dir):
     return index
 
 
-def preload_frames(timestamp_index, channels=CHANNELS):
-    """Memuat seluruh file .nc ke memori dan memvalidasi konsistensi grid latitude-longitude."""
+def get_aligned_candidates(all_timestamps, interval_minutes):
+    """Kandidat titik dasar (t) yang selaras dengan interval, dari daftar timestamp yang tersedia (tanpa membuka file)."""
+    return sorted(ts for ts in all_timestamps if (ts.minute % interval_minutes) == 0)
+
+
+def required_timestamps_for_candidates(candidates, interval_minutes, lag_count=3):
+    """Kumpulan timestamp (lag + target) yang dibutuhkan untuk membangun baris pada kandidat yang diberikan."""
+    delta = timedelta(minutes=interval_minutes)
+    needed = set()
+    for t in candidates:
+        for k in range(lag_count):
+            needed.add(t - k * delta)
+        needed.add(t + delta)
+    return needed
+
+
+def preload_frames(timestamp_index, channels=CHANNELS, only_timestamps=None):
+    """Memuat file .nc ke memori dan memvalidasi konsistensi grid latitude-longitude.
+
+    Kalau `only_timestamps` diberikan, hanya file dengan timestamp di dalamnya yang
+    dibuka (dipakai untuk mode incremental agar tidak perlu load ulang seluruh arsip).
+    """
     frames = {}
     lat_ref, lon_ref = None, None
     n_skipped = 0
 
-    files_sorted = sorted(timestamp_index.items())
+    items = timestamp_index.items()
+    if only_timestamps is not None:
+        items = [(ts, path) for ts, path in items if ts in only_timestamps]
+
+    files_sorted = sorted(items)
     say_info(f"Memuat {len(files_sorted)} file .nc ke memori (kanal tbb_07-tbb_16 saja) ...")
 
     bar = make_total_progress_bar(files_sorted)
@@ -86,14 +110,21 @@ def _cyclical_time_features(ts):
 
 
 def build_interval_dataset(
-    frames, lat, lon, interval_minutes, lag_count=3, channels=CHANNELS, target_var=TARGET_VAR
+    frames, lat, lon, interval_minutes, lag_count=3, channels=CHANNELS, target_var=TARGET_VAR,
+    candidates=None,
 ):
-    """Membangun dataset supervised per-pixel untuk forecasting satu langkah dengan hanya menggunakan timestamp yang lengkap."""
-    all_ts = sorted(frames.keys())
+    """Membangun dataset supervised per-pixel untuk forecasting satu langkah dengan hanya menggunakan timestamp yang lengkap.
+
+    `candidates` opsional: daftar titik dasar (t) yang mau diproses. Kalau None, dihitung
+    dari seluruh timestamp yang ada di `frames` (perilaku lama / full rebuild). Dipakai
+    mode incremental untuk membatasi hanya ke base_time yang belum ada di dataset lama.
+    """
     delta = timedelta(minutes=interval_minutes)
 
-    # Hanya timestamp yang selaras dengan interval yang jadi kandidat titik dasar (t)
-    candidates = [ts for ts in all_ts if (ts.minute % interval_minutes) == 0]
+    if candidates is None:
+        all_ts = sorted(frames.keys())
+        # Hanya timestamp yang selaras dengan interval yang jadi kandidat titik dasar (t)
+        candidates = [ts for ts in all_ts if (ts.minute % interval_minutes) == 0]
 
     n_lat, n_lon = lat.shape[0], lon.shape[0]
     rows = []
