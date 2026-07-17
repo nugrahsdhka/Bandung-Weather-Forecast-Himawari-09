@@ -53,12 +53,12 @@ Area yang di-subset dari citra full-disk Himawari:
            ▼
 ┌──────────────────────┐
 │ 3a. Feature Eng.     │  scripts/03a_build_features.py
-│     (per pixel)      │  → dataset supervised (10/30/60 menit)
+│     (per pixel, ⚡)   │  → dataset supervised (10/30/60 menit), incremental
 └──────────┬────────────┘
            ▼
 ┌──────────────────────┐
 │ 3b. Ekstraksi AR     │  scripts/03b_extract_autoregressive.py
-│     (tbb_13 only)    │  → dataset ramping khusus autoregressive
+│     (tbb_13 only, ⚡) │  → dataset ramping khusus autoregressive, incremental
 └──────────┬────────────┘
            ▼
 ┌──────────────────────┐
@@ -90,6 +90,8 @@ Area yang di-subset dari citra full-disk Himawari:
 └──────────────────────┘
 ```
 
+> ⚡ = tahap yang sudah **incremental** (Tahap 1, 3a, 3b). Tahap 4 dan 5 sengaja tetap **full rebuild** setiap dijalankan — retrain model dari nol memakai seluruh data yang terkumpul dianggap lebih valid daripada mempertahankan training lama, sementara biayanya jauh lebih murah dibanding harus memuat ulang NetCDF di Tahap 3a/3b. Lihat [Catatan Teknis](#-catatan-teknis).
+
 ---
 
 ## 📁 Struktur Folder
@@ -101,8 +103,8 @@ Bandung-Weather-Forecast-Himawari-09/
 └── scripts/
     ├── 01_download_data.py         # Tahap 1: download + subset FTP
     ├── 02_explore_data.py          # Tahap 2: eksplorasi cakupan data
-    ├── 03a_build_features.py       # Tahap 3a: feature engineering
-    ├── 03b_extract_autoregressive.py # Tahap 3b: ekstraksi fitur AR
+    ├── 03a_build_features.py       # Tahap 3a: feature engineering (incremental, --rebuild)
+    ├── 03b_extract_autoregressive.py # Tahap 3b: ekstraksi fitur AR (incremental, --rebuild)
     ├── 04_train_models.py          # Tahap 4: training 4 model ML
     ├── 05_recursive_evaluation.py  # Tahap 5: evaluasi multi-step
     ├── 06_run_inference.py         # Tahap 6: forecast recursive nyata (otomatis/manual)
@@ -115,7 +117,9 @@ Bandung-Weather-Forecast-Himawari-09/
     │   ├── ftp_client.py           # Klien FTP (koneksi, retry, download)
     │   ├── netcdf_tools.py         # Subset & validasi NetCDF
     │   ├── file_tracker.py         # Pelacak file yang sudah diproses
-    │   ├── feature_engineering.py  # Pembangun dataset supervised per-pixel
+    │   ├── feature_engineering.py  # Pembangun dataset supervised per-pixel (mendukung mode incremental)
+    │   ├── incremental_csv.py      # Utilitas CSV aman: atomic write, fast-path kronologis,
+    │   │                            #   guard file korup/tidak terurut, backup saat --rebuild
     │   ├── model_training.py       # Trainer 4 algoritma ML + evaluasi
     │   ├── recursive_eval.py       # Simulasi forecast recursive multi-step
     │   ├── inference.py            # Pemilihan model terbaik & forecast batch
@@ -143,7 +147,7 @@ Bandung-Weather-Forecast-Himawari-09/
 - Retry otomatis hingga `MAX_RETRY=3` kali dengan reconnect FTP jika gagal.
 - Notifikasi real-time ke **Telegram** (opsional) tiap direktori selesai diproses atau saat terjadi error file.
 - Logging lengkap ke `download_activity.log`.
-- **Satu-satunya tahap yang benar-benar incremental** — file yang sudah pernah diperiksa tidak diproses ulang. Tahap 2 s/d 5 selalu memproses **ulang seluruh isi folder data** setiap dijalankan (lihat catatan di bagian [Catatan Teknis](#-catatan-teknis)).
+- Incremental — file yang sudah pernah diperiksa tidak diproses ulang.
 
 ### Tahap 2 — Eksplorasi Data (`02_explore_data.py`)
 
@@ -155,17 +159,22 @@ Bandung-Weather-Forecast-Himawari-09/
 
 Mengubah rangkaian frame CTT (time-series citra) menjadi **dataset supervised per-piksel**:
 
-1. **Preload** seluruh file `.nc` ke memori (10 kanal `tbb_07`–`tbb_16`), validasi grid lat/lon konsisten antar file.
-2. Untuk tiap **interval prediksi** (10, 30, 60 menit) dan tiap **titik waktu dasar `t`** yang selaras dengan interval tersebut:
+1. Menelusuri nama file `.nc` (regex timestamp saja, belum membuka isi file) untuk membangun index seluruh timestamp yang tersedia.
+2. Untuk tiap **interval prediksi** (10, 30, 60 menit), membandingkan kandidat titik dasar `t` yang selaras interval dengan `base_time` yang **sudah ada** di `dataset/features_{interval}min.csv` — hanya kandidat yang **belum diproses** yang dilanjutkan.
+3. **Preload** — hanya file `.nc` yang benar-benar dibutuhkan (lag + target) untuk kandidat baru yang dimuat ke memori (bukan seluruh arsip), lalu divalidasi konsistensi grid lat/lonnya.
+4. Untuk tiap kandidat baru:
    - Ambil **3 frame lag** (`t`, `t-1·interval`, `t-2·interval`) — jika salah satu tidak lengkap, baris dilewati.
    - Ambil **frame target** (`t + interval`).
    - Hitung **fitur waktu siklikal** (encoding sin/cos) agar model memahami sifat periodik jam dan musim tanpa diskontinuitas:
      - `hour_sin/cos` dari jam-dalam-hari (periode 24 jam)
      - `doy_sin/cos` dari hari-dalam-tahun (periode 365.25 hari)
    - Untuk **setiap piksel** di grid (5×7), buat satu baris berisi: koordinat piksel, lat/lon, fitur waktu, seluruh 10 kanal pada 3 titik lag, dan nilai target `tbb_13`.
-3. Simpan sebagai `dataset/features_{interval}min.csv` untuk masing-masing interval.
+5. Baris baru ditambahkan (bukan menimpa) ke `dataset/features_{interval}min.csv`, ditulis secara **atomic** dan tetap terurut rapi berdasarkan `base_time`.
 
-> ⚠️ Tahap ini melakukan **full rebuild** dari nol setiap dijalankan (bukan menambah baris ke file lama) — dia scan ulang seluruh folder data (`.nc`) yang ada dan menimpa CSV lama. Kalau ada data `.nc` baru, jalankan ulang tahap ini (dan seterusnya) supaya ikut terangkum.
+**Mode incremental (default) vs rebuild:**
+- **Default** — hanya memproses `base_time` yang belum ada di CSV, dan hanya membuka file `.nc` yang relevan untuk itu. Jauh lebih cepat untuk run kedua dan seterusnya dibanding memproses ulang seluruh arsip.
+- **`python 03a_build_features.py --rebuild`** — CSV lama otomatis di-**backup** ke `dataset/_backup_{timestamp}/`, lalu dataset dibangun ulang dari nol memakai seluruh data yang ada.
+- Sebelum diproses, file lama divalidasi (guard) terhadap baris duplikat atau urutan `base_time` yang tidak konsisten — kalau terindikasi korup/tidak konsisten (misal karena diedit manual), skrip berhenti dan menyarankan `--rebuild` daripada diam-diam melanjutkan di atas data yang berpotensi salah.
 
 ### Tahap 3b — Ekstraksi Fitur Autoregressive (`03b_extract_autoregressive.py`)
 
@@ -179,6 +188,12 @@ target_tbb_13
 ```
 
 Disimpan sebagai `dataset/features_{interval}min_ar.csv`.
+
+**Mode incremental (default) vs rebuild:**
+- **Default** — membaca `features_{interval}min.csv` (hasil Tahap 3a) dan hanya menambahkan baris dengan `base_time` yang belum ada di `_ar.csv` lama. Kalau tidak ada baris baru, tahap ini dilewati sepenuhnya untuk interval tersebut.
+- **`python 03b_extract_autoregressive.py --rebuild`** — `_ar.csv` lama otomatis di-backup, lalu dibangun ulang dari nol.
+- Ditulis dengan mekanisme yang sama seperti Tahap 3a: atomic write, fast-path append kalau data baru kronologis (langsung nempel di akhir file tanpa baca-ulang seluruh isi), dan guard validasi file lama sebelum diproses.
+- Karena Tahap 3b bergantung pada output Tahap 3a, urutan jalannya **harus** 3a dulu baru 3b (tidak disarankan dijalankan bersamaan/paralel).
 
 ### Tahap 4 — Training Model (`04_train_models.py` + `pipeline/model_training.py`)
 
@@ -198,7 +213,7 @@ Disimpan sebagai `dataset/features_{interval}min_ar.csv`.
 - Evaluasi pada test set memakai **MAE**, **RMSE**, dan **R²**.
 - Model + scaler disimpan ke `models/{interval}min/{model_name}.joblib`.
 - Ringkasan seluruh kombinasi model×interval disimpan ke `models/training_summary.csv`.
-- Seperti Tahap 3a, ini juga **full rebuild** — semua model dilatih ulang dari nol memakai seluruh dataset yang tersedia saat itu.
+- Tahap ini **sengaja dibiarkan full rebuild** — semua model dilatih ulang dari nol memakai seluruh dataset yang tersedia saat itu (lihat alasan di [Catatan Teknis](#-catatan-teknis)).
 
 ### Tahap 5 — Evaluasi Recursive Multi-Step (`05_recursive_evaluation.py` + `pipeline/recursive_eval.py`)
 
@@ -319,6 +334,8 @@ python 01_download_data.py
 python 02_explore_data.py
 
 # Tahap 3: feature engineering + ekstraksi fitur autoregressive
+# (incremental secara default -- hanya base_time baru yang diproses;
+#  jalankan 3a dulu baru 3b, jangan bersamaan/paralel)
 python 03a_build_features.py
 python 03b_extract_autoregressive.py
 
@@ -342,7 +359,16 @@ python 07_test_visualization.py
 python 08_render_animation.py
 ```
 
-> 💡 Kalau nanti menambah data `.nc` baru: cukup ulangi dari Tahap 1 (atau 3a kalau data sudah ada) sampai Tahap 8. Tahap 3a–5 selalu memproses ulang seluruh data dari nol (bukan incremental), jadi tidak perlu langkah tambahan khusus selain menjalankan urutan yang sama.
+**Kalau mau membangun ulang dataset dari nol** (bukan incremental) untuk Tahap 3a/3b — misalnya karena data lama ternyata perlu dikoreksi, atau ingin memastikan dataset benar-benar bersih:
+
+```bash
+python 03a_build_features.py --rebuild
+python 03b_extract_autoregressive.py --rebuild
+```
+
+File lama akan otomatis **di-backup** ke `dataset/_backup_{timestamp}/` sebelum dibangun ulang, jadi tidak ada data yang hilang permanen akibat pemakaian flag ini.
+
+> 💡 Kalau nanti menambah data `.nc` baru: cukup ulangi dari Tahap 1 (atau 3a kalau data `.nc` sudah ada) sampai Tahap 8. Tahap 3a dan 3b sekarang **incremental** — hanya `base_time` baru yang diproses & ditambahkan (append), bukan membangun ulang dataset dari nol setiap kali. Tahap 4 dan 5 tetap memproses ulang seluruh dataset setiap dijalankan (lihat [Catatan Teknis](#-catatan-teknis) untuk alasannya).
 
 ## 📤 Output yang Dihasilkan
 
@@ -350,7 +376,7 @@ python 08_render_animation.py
 |---|---|
 | `data_bandung/` | File NetCDF hasil subset area Bandung |
 | `_metadata/` | Log file yang sudah diperiksa/diproses (untuk resume) |
-| `dataset/` | CSV fitur (`features_{interval}min.csv`, `features_{interval}min_ar.csv`) |
+| `dataset/` | CSV fitur (`features_{interval}min.csv`, `features_{interval}min_ar.csv`), plus subfolder `_backup_{timestamp}/` kalau pernah dijalankan dengan `--rebuild` |
 | `models/` | Model terlatih (`.joblib`), scaler SVR, `training_summary.csv`, `recursive_evaluation.csv` |
 | `forecast_output/` | `last_run_state.json` (info run terakhir) + subfolder per-timestamp `{YYYYMMDD_HHMM}/` berisi `full10min.csv`, `display30min.csv`, `display60min.csv` |
 | `visualizations/` | Subfolder per-timestamp `{YYYYMMDD_HHMM}/` berisi frame PNG 6-panel, animasi GIF per interval, dan folder `frames/` (PNG mentah animasi) |
@@ -362,6 +388,9 @@ python 08_render_animation.py
 - **Ukuran grid**: area Bandung yang di-subset menghasilkan grid kecil (~5×7 piksel) sesuai resolusi native Himawari-9 di area tersebut — karena itu peta divisualisasikan dengan interpolasi upsampling agar tampak halus, bukan karena resolusi model yang tinggi.
 - **Pendekatan model**: per-piksel + autoregressive, **bukan** model spasial (mis. CNN/ConvLSTM) — setiap piksel diprediksi independen berdasarkan riwayat waktunya sendiri, lat/lon, dan fitur musiman/harian.
 - **Pemilihan model final** dilakukan otomatis berdasarkan performa recursive (multi-step), bukan cuma performa satu langkah — ini penting karena error cenderung terakumulasi pada forecast recursive jangka panjang.
-- **Incremental vs full-rebuild**: hanya Tahap 1 (download) yang incremental (resume otomatis via `FileTracker`). Tahap 3a, 3b, 4, dan 5 selalu memproses ulang **seluruh** data yang ada di folder setiap dijalankan (bukan menambah ke file lama) — jadi waktu proses akan bertambah seiring makin banyak data yang terkumpul.
+- **Incremental vs full-rebuild**:
+  - Tahap 1 (download), 3a (feature engineering), dan 3b (ekstraksi AR) bersifat **incremental** — hanya data baru yang diproses dan ditambahkan (append) ke file yang sudah ada, bukan membangun ulang dari nol setiap kali. Keduanya bisa dipaksa full rebuild dengan flag `--rebuild` (file lama otomatis dibackup dulu, tidak dihapus).
+  - Tahap 4 (training) dan 5 (evaluasi recursive) **sengaja tetap full rebuild** setiap dijalankan. Alasannya: seiring makin banyak data terkumpul, retrain model dari nol memakai seluruh data dianggap lebih valid daripada "menyambung" training lama — terutama karena split train/test kronologis (85/15) ikut bergeser tiap kali ada data baru, dan tidak semua algoritma (mis. SVR) mendukung incremental training. Biaya retrain penuh juga jauh lebih murah dibanding Tahap 3a/3b yang harus memuat ulang file NetCDF.
+  - Menulis CSV di Tahap 3a/3b memakai **atomic write** (tulis ke file sementara lalu di-*rename*), jadi kalau proses diinterupsi (Ctrl+C, mati listrik, dsb) di tengah jalan, file lama tidak akan pernah rusak/setengah tertulis. Sebelum diproses, file lama juga divalidasi (guard) terhadap duplikat baris atau urutan yang tidak konsisten.
 - **Run forecast (Tahap 6–8) tidak saling menimpa**: setiap kombinasi timestamp `t0` punya subfolder sendiri di `forecast_output/` dan `visualizations/`, jadi hasil forecast dari tanggal berbeda-beda bisa disimpan berdampingan tanpa perlu diganti nama manual.
 - Proyek tampaknya ditujukan sebagai alat bantu **peringatan dini potensi hujan/genangan** di Kota Bandung (lihat kategori "Kelas Awan" dan "Risk Banjir" pada visualisasi). Perlu dicatat: `tbb_13` adalah **proxy suhu awan**, bukan pengukuran curah hujan langsung — untuk validasi/skala yang lebih rigor terhadap kejadian hujan aktual, disarankan menyandingkan dengan data hujan observasi (mis. GSMaP, GPM IMERG, atau data BMKG).
