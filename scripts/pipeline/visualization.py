@@ -13,41 +13,6 @@ from matplotlib.ticker import FormatStrFormatter
 import geopandas as gpd
 from pathlib import Path
 
-# ==== Data kecamatan (dipakai sebagai marker + label di peta) ====
-KECAMATAN_LIST = [
-    {"name": "Bandung Wetan", "lat": -6.9055905, "lon": 107.6109559},
-    {"name": "Coblong", "lat": -6.8851992, "lon": 107.6136456},
-    {"name": "Sukajadi", "lat": -6.8922842, "lon": 107.5909487},
-    {"name": "Batununggal", "lat": -6.9317606, "lon": 107.6431247},
-    {"name": "Sumurbandung", "lat": -6.9160833, "lon": 107.6089776},
-    {"name": "Cidadap", "lat": -6.8658706, "lon": 107.6060182},
-    {"name": "Regol", "lat": -6.9375914, "lon": 107.6091286},
-    {"name": "Lengkong", "lat": -6.9309616, "lon": 107.6224602},
-    {"name": "Buahbatu", "lat": -6.9557189, "lon": 107.6542139},
-    {"name": "Andir", "lat": -6.9136276, "lon": 107.5776047},
-    {"name": "Cicendo", "lat": -6.9063897, "lon": 107.5975738},
-    # {"name": "Bandung Kulon", "lat": -6.9267005, "lon": 107.5657164},
-    # {"name": "Bojongloa Kaler", "lat": -6.9259906, "lon": 107.5912622},
-    # {"name": "Kiaracondong", "lat": -6.9221438, "lon": 107.6490717},
-    # {"name": "Rancasari", "lat": -6.9466401, "lon": 107.6761534},
-    # {"name": "Arcamanik", "lat": -6.9291188, "lon": 107.6764994},
-    # {"name": "Cibeunying Kidul", "lat": -6.90069, "lon": 107.6458487},
-    # {"name": "Cibeunying Kaler", "lat": -6.8927351, "lon": 107.6354505},
-    # {"name": "Babakan Ciparay", "lat": -6.9569775, "lon": 107.5821392},
-    # {"name": "Astanaanyar", "lat": -6.9299008, "lon": 107.5993373},
-    # {"name": "Sukasari", "lat": -6.8630393, "lon": 107.588082},
-    # {"name": "Mandalajati", "lat": -6.9039442, "lon": 107.6776633},
-    # {"name": "Antapani", "lat": -6.9135245, "lon": 107.6594029},
-    # {"name": "Bandung Kidul", "lat": -6.9526296, "lon": 107.6380345},
-    # {"name": "Gedebage", "lat": -6.9436184, "lon": 107.6815776},
-    # {"name": "Bojongloa Kidul", "lat": -6.9521836, "lon": 107.5934256},
-    # {"name": "Ujung Berung", "lat": -6.9060909, "lon": 107.6911552},
-    # {"name": "Cinambo", "lat": -6.9371022, "lon": 107.6925593},
-    # {"name": "Panyileukan", "lat": -6.92388, "lon": 107.7004759},
-    # {"name": "Cibiru", "lat": -6.9230294, "lon": 107.7199696},
-]
-
-
 BASE_DIR = Path(__file__).resolve().parent.parent
 GEOJSON_PATH = BASE_DIR / "geojson" / "KotaBandung.geojson"
 
@@ -58,9 +23,9 @@ CLOUD_BINS = [220, 260]
 CLOUD_LABELS = ["Hujan", "Mendung", "Tidak Hujan"]
 
 CLOUD_COLORS = [
-    "#082269",  
-    "#5F6B7A",  
-    "#8A6A00",  
+    "#082269",
+    "#5F6B7A",
+    "#8A6A00",
 ]
 
 RISK_BINS = [240, 265]
@@ -90,6 +55,17 @@ GLASS_THERMAL = LinearSegmentedColormap.from_list(
 GLASS_ERROR = LinearSegmentedColormap.from_list(
     "glass_error", ["#F8FAFC", "#DBB90C", "#CA5E05", "#9A0C0C", "#3D0101"]
 )
+
+# ==== Skala CTT (K) & Error (K) yang FIKS, supaya tidak berubah-ubah antar panel/run ====
+CTT_VMIN = 220.0
+CTT_VMAX = 300.0
+CTT_LEVELS = np.linspace(CTT_VMIN, CTT_VMAX, 26)   # 25 pita warna, tetap
+CTT_TICKS = np.linspace(CTT_VMIN, CTT_VMAX, 6)
+
+ERROR_VMIN = 0.0
+ERROR_VMAX = 10.0
+ERROR_LEVELS = np.linspace(ERROR_VMIN, ERROR_VMAX, 21)
+ERROR_TICKS = np.linspace(ERROR_VMIN, ERROR_VMAX, 6)
 
 
 def classify(values, bins):
@@ -183,7 +159,7 @@ def _draw_kecamatan(ax):
         )
 
 
-def _style_axis(ax, lat_fine, lon_fine, kecamatan_list):
+def _style_axis(ax, lat_fine, lon_fine):
     ax.set_facecolor("none")
     minx, miny, maxx, maxy = BANDUNG_BOUNDARY.total_bounds
 
@@ -204,15 +180,24 @@ def _style_axis(ax, lat_fine, lon_fine, kecamatan_list):
         spine.set_visible(False)
 
 
-def _plot_continuous(ax, lat_fine, lon_fine, values_fine, title, kecamatan_list, cmap=GLASS_THERMAL):
+def _plot_continuous(
+    ax, lat_fine, lon_fine, values_fine, title,
+    cmap=GLASS_THERMAL, vmin=CTT_VMIN, vmax=CTT_VMAX, levels=CTT_LEVELS,
+    ticks=CTT_TICKS, cb_label="CTT (K)",
+):
     ax.set_title(title, color=FG_COLOR, fontsize=11, fontweight="700", pad=8)
-    cf = ax.contourf(lon_fine, lat_fine, values_fine, levels=25, cmap=cmap, alpha=0.92)
-    cb = plt.colorbar(cf, ax=ax, fraction=0.046, pad=0.03, shrink=0.75)
+    cf = ax.contourf(
+        lon_fine, lat_fine, values_fine,
+        levels=levels, vmin=vmin, vmax=vmax,
+        cmap=cmap, alpha=0.92, extend="both",
+    )
+    cb = plt.colorbar(cf, ax=ax, fraction=0.046, pad=0.03, shrink=0.75, ticks=ticks)
     cb.outline.set_visible(False)
     cb.ax.tick_params(colors=MUTED_COLOR, labelsize=6)
-    cb.set_label("CTT (K)", color=MUTED_COLOR, fontsize=7)
-    _style_axis(ax, lat_fine, lon_fine, kecamatan_list)
+    cb.set_label(cb_label, color=MUTED_COLOR, fontsize=7)
+    _style_axis(ax, lat_fine, lon_fine)
     cb.ax.yaxis.set_major_formatter(FormatStrFormatter("%.1f"))
+    return cb
 
 
 def _add_category_legend(ax, labels, colors):
@@ -229,22 +214,56 @@ def _add_category_legend(ax, labels, colors):
         text.set_color(FG_COLOR)
 
 
-def _plot_categorical(ax, lat_fine, lon_fine, values_fine, bins, labels, colors, title, kecamatan_list):
+def _plot_categorical(ax, lat_fine, lon_fine, values_fine, bins, labels, colors, title):
     ax.set_title(title, color=FG_COLOR, fontsize=11, fontweight="700", pad=8)
     cat = classify(values_fine, bins)
     cmap = ListedColormap(colors)
     norm = BoundaryNorm(list(range(len(labels) + 1)), cmap.N)
     ax.pcolormesh(lon_fine, lat_fine, cat, cmap=cmap, norm=norm, shading="auto", alpha=0.88)
-    _style_axis(ax, lat_fine, lon_fine, kecamatan_list)
+    _style_axis(ax, lat_fine, lon_fine)
     _add_category_legend(ax, labels, colors)
     return cat
+
+
+def _plot_placeholder(
+    ax, lat_fine, lon_fine, title,
+    kind="continuous", cmap=GLASS_THERMAL, vmin=CTT_VMIN, vmax=CTT_VMAX,
+    ticks=CTT_TICKS, cb_label="CTT (K)", labels=None, colors=None,
+):
+    """
+    Placeholder panel saat data aktual belum tersedia.
+    Tetap menggambar colorbar/legend kosong dengan geometri sama
+    seperti panel berisi data, supaya ukuran subplot tetap konsisten.
+    """
+    ax.set_title(title, color=FG_COLOR, fontsize=11, fontweight="700", pad=8)
+
+    if kind == "continuous":
+        norm = plt.Normalize(vmin=vmin, vmax=vmax)
+        sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+        sm.set_array([])
+        cb = plt.colorbar(sm, ax=ax, fraction=0.046, pad=0.03, shrink=0.75, ticks=ticks)
+        cb.outline.set_visible(False)
+        cb.ax.tick_params(colors=MUTED_COLOR, labelsize=6)
+        cb.set_label(cb_label, color=MUTED_COLOR, fontsize=7)
+        cb.ax.yaxis.set_major_formatter(FormatStrFormatter("%.1f"))
+
+    _style_axis(ax, lat_fine, lon_fine)
+
+    if kind == "categorical":
+        _add_category_legend(ax, labels, colors)
+
+    ax.text(
+        0.5, 0.5, "Data aktual\nbelum tersedia",
+        color=MUTED_COLOR, fontsize=10, ha="center", va="center",
+        transform=ax.transAxes, zorder=20,
+    )
 
 
 def render_six_panel(
     lat_arr, lon_arr,
     input_grid, pred_grid, actual_grid,
     t0_label, forecast_label, interval_minutes,
-    out_path=None, kecamatan_list=KECAMATAN_LIST, interp_factor=12,
+    out_path=None, interp_factor=12,
 ):
     """
     Render figure 6-panel modern minimalist dark theme.
@@ -280,33 +299,48 @@ def render_six_panel(
     fig.suptitle(title_line1, color=FG_COLOR, fontsize=15, fontweight="700", y=0.97)
     fig.text(0.5, 0.915, title_line2, color="#38BDF8", fontsize=10.5, ha="center", fontweight="400")
 
-    _plot_continuous(axes[0, 0], lat_fine, lon_fine, input_fine, f"Input • {t0_label}", kecamatan_list)
-    _plot_continuous(axes[0, 1], lat_fine, lon_fine, pred_fine, f"Prediksi • {forecast_label}", kecamatan_list)
+    # Input & Prediksi selalu memakai skala CTT (K) fiks (CTT_VMIN..CTT_VMAX)
+    _plot_continuous(axes[0, 0], lat_fine, lon_fine, input_fine, f"Input • {t0_label}")
+    _plot_continuous(axes[0, 1], lat_fine, lon_fine, pred_fine, f"Prediksi • {forecast_label}")
 
     if has_actual:
-        _plot_continuous(axes[0, 2], lat_fine, lon_fine, actual_fine, f"Aktual • {forecast_label}", kecamatan_list)
-        _plot_categorical(axes[1, 0], lat_fine, lon_fine, actual_fine, CLOUD_BINS, CLOUD_LABELS, CLOUD_COLORS, "Kelas Awan", kecamatan_list)
-        
+        _plot_continuous(axes[0, 2], lat_fine, lon_fine, actual_fine, f"Aktual • {forecast_label}")
+        _plot_categorical(axes[1, 0], lat_fine, lon_fine, actual_fine, CLOUD_BINS, CLOUD_LABELS, CLOUD_COLORS, "Kelas Awan")
+
         error_fine = np.abs(pred_fine - actual_fine)
         axes[1, 2].set_title(f"Error Map  (MAE = {mae:.3f}K)", color=FG_COLOR, fontsize=11, fontweight="700", pad=8)
-        cf = axes[1, 2].contourf(lon_fine, lat_fine, error_fine, levels=20, cmap=GLASS_ERROR, alpha=0.9)
-        cb = plt.colorbar(cf, ax=axes[1, 2], fraction=0.046, pad=0.03, shrink=0.75)
+        cf = axes[1, 2].contourf(
+            lon_fine, lat_fine, error_fine,
+            levels=ERROR_LEVELS, vmin=ERROR_VMIN, vmax=ERROR_VMAX,
+            cmap=GLASS_ERROR, alpha=0.9, extend="max",
+        )
+        cb = plt.colorbar(cf, ax=axes[1, 2], fraction=0.046, pad=0.03, shrink=0.75, ticks=ERROR_TICKS)
         cb.outline.set_visible(False)
         cb.ax.tick_params(colors=MUTED_COLOR, labelsize=6)
-        _style_axis(axes[1, 2], lat_fine, lon_fine, kecamatan_list)
+        cb.set_label("Error (K)", color=MUTED_COLOR, fontsize=7)
+        cb.ax.yaxis.set_major_formatter(FormatStrFormatter("%.1f"))
+        _style_axis(axes[1, 2], lat_fine, lon_fine)
     else:
-        for ax, msg in [(axes[0, 2], "CTT Aktual"), (axes[1, 0], "Kelas Awan"), (axes[1, 2], "Error")]:
-            ax.set_title(f"{msg} (Forecast Mode)", color=FG_COLOR, fontsize=11, fontweight="700", pad=8)
-            ax.text(0.5, 0.5, "Data aktual\nbelum tersedia", color=MUTED_COLOR,
-                    fontsize=10, ha="center", va="center", transform=ax.transAxes)
-            ax.set_xticks([])
-            ax.set_yticks([])
-            for spine in ax.spines.values():
-                spine.set_visible(False)
+        # Panel placeholder tetap menggambar colorbar/legend kosong dengan
+        # geometri sama seperti versi berisi data, supaya ukuran panel identik.
+        _plot_placeholder(
+            axes[0, 2], lat_fine, lon_fine, f"Aktual • {forecast_label}",
+            kind="continuous", cmap=GLASS_THERMAL, vmin=CTT_VMIN, vmax=CTT_VMAX,
+            ticks=CTT_TICKS, cb_label="CTT (K)",
+        )
+        _plot_placeholder(
+            axes[1, 0], lat_fine, lon_fine, "Kelas Awan",
+            kind="categorical", labels=CLOUD_LABELS, colors=CLOUD_COLORS,
+        )
+        _plot_placeholder(
+            axes[1, 2], lat_fine, lon_fine, "Error Map",
+            kind="continuous", cmap=GLASS_ERROR, vmin=ERROR_VMIN, vmax=ERROR_VMAX,
+            ticks=ERROR_TICKS, cb_label="Error (K)",
+        )
 
     _plot_categorical(
         axes[1, 1], lat_fine, lon_fine, pred_fine, RISK_BINS, RISK_LABELS, RISK_COLORS,
-        f"Risk Banjir • {risk_status}", kecamatan_list,
+        f"Risk Banjir • {risk_status}",
     )
 
     plt.tight_layout(
