@@ -18,7 +18,7 @@ from pipeline.inference import (
 )
 
 # ==== GANTI SESUAI KEBUTUHAN (opsional) ====
-T0_STR = "2026-01-04 00:20:00"   # None = otomatis pakai base_time TERBARU di features_10min_ar.csv
+T0_STR = "2026-01-03 10:10:00"   # None = otomatis pakai base_time TERBARU di features_10min_ar.csv
 BASE_INTERVAL_MINUTES = 10
 HORIZON_MINUTES = 180
 DISPLAY_INTERVALS = [10, 30, 60]
