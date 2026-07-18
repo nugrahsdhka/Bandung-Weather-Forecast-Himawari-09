@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 
 from pipeline.model_training import FEATURE_COLUMNS
+from pipeline.delta_features import compute_delta_dict
 
 
 def cyclical_time_features(ts):
@@ -91,10 +92,12 @@ def recursive_predict(model, scaler, start_point, interval_minutes, n_steps, loo
 
     for k in range(1, n_steps + 1):
         tf = cyclical_time_features(cur_ref)
+        delta_feats = compute_delta_dict(window[2], window[1], window[0])
         X = pd.DataFrame([{
             "lat": lat, "lon": lon,
             **tf,
             "tbb_13_t": window[2], "tbb_13_tm1": window[1], "tbb_13_tm2": window[0],
+            **delta_feats,
         }])[FEATURE_COLUMNS]
 
         X_eval = scaler.transform(X) if scaler is not None else X

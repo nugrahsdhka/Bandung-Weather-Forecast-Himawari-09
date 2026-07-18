@@ -6,19 +6,25 @@ import time
 import numpy as np
 import pandas as pd
 
+from pipeline.delta_features import DELTA_COLUMNS, add_delta_features
+
+# Fitur delta/tren (tbb_13_delta_t, tbb_13_delta_tm1, tbb_13_accel) ditambahkan
+# di sini -- SATU tempat rujukan untuk seluruh pipeline (04, 05, 06), supaya
+# fiturnya konsisten di semua tahap training & inference.
 FEATURE_COLUMNS = [
     "lat", "lon",
     "hour_sin", "hour_cos", "doy_sin", "doy_cos",
     "tbb_13_t", "tbb_13_tm1", "tbb_13_tm2",
-]
+] + DELTA_COLUMNS
 TARGET_COLUMN = "target_tbb_13"
 
 
 def load_ar_dataset(path):
-    """Baca dataset autoregressive, pastikan base_time bertipe datetime."""
+    """Baca dataset autoregressive, pastikan base_time bertipe datetime, tambahkan fitur delta/tren."""
     df = pd.read_csv(path)
     df["base_time"] = pd.to_datetime(df["base_time"])
     df["target_time"] = pd.to_datetime(df["target_time"])
+    df = add_delta_features(df)
     return df
 
 

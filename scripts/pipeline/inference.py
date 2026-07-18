@@ -6,6 +6,7 @@ import pandas as pd
 
 from pipeline.model_training import FEATURE_COLUMNS
 from pipeline.recursive_eval import cyclical_time_features, get_actual
+from pipeline.delta_features import compute_delta_dict
 
 
 def select_best_model(models_dir, interval_minutes, model_names):
@@ -84,6 +85,7 @@ def run_recursive_forecast(model, scaler, t0, windows, n_steps=18, interval_minu
                 "lat": lat, "lon": lon,
                 **tf,
                 "tbb_13_t": w[2], "tbb_13_tm1": w[1], "tbb_13_tm2": w[0],
+                **compute_delta_dict(w[2], w[1], w[0]),
             })
         X = pd.DataFrame(X_rows)[FEATURE_COLUMNS]
         X_eval = scaler.transform(X) if scaler is not None else X
