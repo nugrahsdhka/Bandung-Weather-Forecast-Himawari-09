@@ -1,6 +1,7 @@
 # ./scripts/04_train_models.py
 # Menjalankan pipeline pelatihan model machine learning pada dataset autoregressive, meliputi pembagian data secara kronologis, training, evaluasi, dan penyimpanan model serta metrik performa.
 
+import argparse
 import os
 import joblib
 import pandas as pd
@@ -18,7 +19,22 @@ from pipeline.model_training import (
 TEST_FRAC = 0.15
 
 
+def parse_args():
+    p = argparse.ArgumentParser(description="Training model CTT forecasting.")
+    p.add_argument(
+        "--noise-std", type=float, default=0.0,
+        help=(
+            "Fix #3: std noise Gaussian yang ditambahkan ke fitur lag "
+            "(tbb_13_t/tm1/tm2) saat training, meniru kondisi recursive "
+            "forecasting. Rekomendasi: ~seukuran MAE step-1 model (mis. 1.0-2.0). "
+            "Default 0 = tanpa noise (perilaku lama)."
+        ),
+    )
+    return p.parse_args()
+
+
 def main():
+    args = parse_args()
     cfg = load_config()
     dataset_dir = os.path.join(cfg.PROJECT_ROOT, "dataset")
     models_dir = os.path.join(cfg.PROJECT_ROOT, "models")
@@ -28,6 +44,8 @@ def main():
     say_info(f"Folder dataset : {dataset_dir}")
     say_info(f"Folder model   : {models_dir}")
     say_info(f"Test fraction  : {TEST_FRAC} (kronologis)")
+    if args.noise_std > 0:
+        say_info(f"Noise injection (fix #3): std={args.noise_std}K pada fitur lag saat training")
     hr()
 
     summary_rows = []
@@ -57,7 +75,7 @@ def main():
         for model_name in cfg.MODEL_NAMES:
             say_info(f"Melatih {model_name} ...")
             try:
-                model, scaler, elapsed = train_one_model(model_name, X_train, y_train)
+                model, scaler, elapsed = train_one_model(model_name, X_train, y_train, noise_std=args.noise_std)
                 metrics = evaluate(model, X_test, y_test, scaler=scaler)
 
                 model_path = os.path.join(interval_dir, f"{model_name}.joblib")
