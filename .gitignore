@@ -54,3 +54,6 @@ forecast_output/
 
 # Visualization Output
 visualizations/
+
+# Test
+test_file.txt
