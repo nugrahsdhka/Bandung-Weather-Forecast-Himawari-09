@@ -1,114 +1,105 @@
 # ./scripts/pipeline/recursive_eval.py
+# Evaluasi recursive multi-step forecasting -- direfactor (fix #1 & #4) untuk
+# mensimulasikan SEMUA piksel bersamaan per titik awal (t0), persis seperti
+# yang terjadi di produksi (pipeline/inference.py run_recursive_forecast).
+# Ini penting karena fitur tetangga (fix #4) butuh nilai piksel lain pada
+# step yang sama, dan metrik anti-collapse (fix #1) butuh sebaran prediksi
+# ANTAR piksel pada step yang sama -- keduanya tidak bisa dihitung benar
+# kalau tiap piksel disimulasikan independen dengan t0 yang berbeda-beda.
 
 from datetime import timedelta
 
 import numpy as np
-import pandas as pd
 
-from pipeline.model_training import FEATURE_COLUMNS
-from pipeline.delta_features import compute_delta_dict
+from pipeline.time_features import cyclical_time_features
+from pipeline.ground_truth import build_ground_truth_lookup, get_actual
+from pipeline.inference import get_initial_windows, run_recursive_forecast
 
-
-def cyclical_time_features(ts):
-    """Encoding siklikal untuk jam-dalam-hari & hari-dalam-tahun (harus identik dengan yang dipakai saat feature engineering)."""
-    hour_frac = ts.hour + ts.minute / 60.0
-    doy = ts.timetuple().tm_yday
-    return {
-        "hour_sin": np.sin(2 * np.pi * hour_frac / 24.0),
-        "hour_cos": np.cos(2 * np.pi * hour_frac / 24.0),
-        "doy_sin": np.sin(2 * np.pi * doy / 365.25),
-        "doy_cos": np.cos(2 * np.pi * doy / 365.25),
-    }
+__all__ = [
+    "cyclical_time_features", "build_ground_truth_lookup", "get_actual",
+    "spatial_collapse_ratio", "spatial_correlation",
+    "select_valid_t0", "evaluate_recursive_at_t0",
+]
 
 
-def build_ground_truth_lookup(df10):
+def spatial_collapse_ratio(preds, actuals):
     """
-    Bangun lookup {(pixel_row, pixel_col, timestamp): nilai_aktual_tbb_13}
-    dari dataset 10 menit (resolusi native), dipakai untuk membandingkan
-    hasil recursive forecast terhadap data aktual di SEMUA interval
-    (10/30/60 menit sama-sama kelipatan 10 menit).
+    std(prediksi) / std(aktual) ANTAR piksel pada satu step yang sama.
+    Mendekati 0 berarti model kolaps jadi rata dan kehilangan variasi
+    spasial -- MAE saja tidak bisa mendeteksi ini (lihat fix #1).
     """
-    lookup = {}
-    for row in df10.itertuples(index=False):
-        lookup[(row.pixel_row, row.pixel_col, row.base_time)] = row.tbb_13_t
-        lookup[(row.pixel_row, row.pixel_col, row.target_time)] = row.target_tbb_13
-    return lookup
+    preds = np.asarray(preds, dtype=float)
+    actuals = np.asarray(actuals, dtype=float)
+    return float(np.std(preds) / (np.std(actuals) + 1e-6))
 
 
-def get_actual(lookup, pixel_row, pixel_col, ts):
-    return lookup.get((pixel_row, pixel_col, ts))
+def spatial_correlation(preds, actuals):
+    """Korelasi spasial antara prediksi & aktual antar piksel pada satu step."""
+    preds = np.asarray(preds, dtype=float)
+    actuals = np.asarray(actuals, dtype=float)
+    if len(preds) < 2 or np.std(preds) < 1e-9 or np.std(actuals) < 1e-9:
+        return 0.0
+    return float(np.corrcoef(preds, actuals)[0, 1])
 
 
-def select_start_points(test_df, interval_minutes, lookup, n_steps, max_points):
+def select_valid_t0(df, interval_minutes, lookup, n_steps, max_points):
     """
-    Pilih titik awal (waktu + pixel) dari test set yang punya rantai
-    ground-truth LENGKAP sampai n_steps ke depan (dibutuhkan untuk bisa
-    menghitung error di setiap langkah recursive, termasuk langkah terakhir).
+    Pilih titik awal t0 (bukan per-pixel lagi) dari test set yang: semua
+    piksel di base_time itu tersedia, DAN ground-truth aktualnya lengkap
+    untuk semua piksel sampai n_steps ke depan (dibutuhkan untuk metrik
+    spasial per step, termasuk step terakhir).
     """
     delta = timedelta(minutes=interval_minutes)
-    candidates = test_df[
-        ["base_time", "pixel_row", "pixel_col", "lat", "lon", "tbb_13_t", "tbb_13_tm1", "tbb_13_tm2"]
-    ].drop_duplicates(subset=["base_time", "pixel_row", "pixel_col"])
+    t0_candidates = sorted(df["base_time"].unique())
 
-    valid = []
-    for row in candidates.itertuples(index=False):
-        t0 = row.base_time
-        pr, pc = row.pixel_row, row.pixel_col
+    valid_t0 = []
+    for t0 in t0_candidates:
+        pixels = (
+            df[df["base_time"] == t0][["pixel_row", "pixel_col"]]
+            .drop_duplicates()
+            .itertuples(index=False)
+        )
+        pixels = list(pixels)
+        if not pixels:
+            continue
 
         ok = True
-        for k in range(1, n_steps + 1):
-            if get_actual(lookup, pr, pc, t0 + k * delta) is None:
-                ok = False
+        for row in pixels:
+            for k in range(1, n_steps + 1):
+                if get_actual(lookup, row.pixel_row, row.pixel_col, t0 + k * delta) is None:
+                    ok = False
+                    break
+            if not ok:
                 break
 
         if ok:
-            valid.append({
-                "t0": t0, "pixel_row": pr, "pixel_col": pc,
-                "lat": row.lat, "lon": row.lon,
-                "tbb_13_t": row.tbb_13_t, "tbb_13_tm1": row.tbb_13_tm1, "tbb_13_tm2": row.tbb_13_tm2,
-            })
-        if len(valid) >= max_points:
+            valid_t0.append(t0)
+        if len(valid_t0) >= max_points:
             break
 
-    return valid
+    return valid_t0
 
 
-def recursive_predict(model, scaler, start_point, interval_minutes, n_steps, lookup):
+def evaluate_recursive_at_t0(model, scaler, df, t0, interval_minutes, n_steps, lookup):
     """
-    Simulasikan forecast recursive sepanjang n_steps, mulai dari start_point.
-    Tiap langkah: prediksi t+interval, lalu geser jendela [tm2, tm1, t] dan
-    pakai hasil prediksi sebagai nilai 't' baru untuk langkah berikutnya.
-
-    Return list of (langkah_ke, error_absolut) untuk langkah yang punya
-    ground-truth aktual di lookup.
+    Jalankan recursive forecast joint (semua piksel) dari satu t0, lalu
+    kembalikan list dict per step: {langkah_ke, preds, actuals} (list nilai
+    antar piksel), siap dipakai menghitung MAE/collapse-ratio/korelasi.
     """
-    delta = timedelta(minutes=interval_minutes)
-    lat, lon = start_point["lat"], start_point["lon"]
-    pr, pc = start_point["pixel_row"], start_point["pixel_col"]
+    windows = get_initial_windows(df, t0)
+    forecast_df = run_recursive_forecast(
+        model, scaler, t0, windows, n_steps=n_steps,
+        interval_minutes=interval_minutes, lookup=lookup,
+    )
 
-    window = [start_point["tbb_13_tm2"], start_point["tbb_13_tm1"], start_point["tbb_13_t"]]  # [tm2, tm1, t]
-    cur_ref = start_point["t0"]
-    results = []
-
-    for k in range(1, n_steps + 1):
-        tf = cyclical_time_features(cur_ref)
-        delta_feats = compute_delta_dict(window[2], window[1], window[0])
-        X = pd.DataFrame([{
-            "lat": lat, "lon": lon,
-            **tf,
-            "tbb_13_t": window[2], "tbb_13_tm1": window[1], "tbb_13_tm2": window[0],
-            **delta_feats,
-        }])[FEATURE_COLUMNS]
-
-        X_eval = scaler.transform(X) if scaler is not None else X
-        y_pred = float(model.predict(X_eval)[0])
-
-        target_time = cur_ref + delta
-        actual_val = get_actual(lookup, pr, pc, target_time)
-        if actual_val is not None:
-            results.append((k, abs(y_pred - actual_val)))
-
-        window = [window[1], window[2], y_pred]
-        cur_ref = target_time
-
-    return results
+    per_step = []
+    for step, group in forecast_df.groupby("step"):
+        valid = group.dropna(subset=["actual_tbb13"])
+        if valid.empty:
+            continue
+        per_step.append({
+            "langkah_ke": int(step),
+            "preds": valid["predicted_tbb13"].to_numpy(),
+            "actuals": valid["actual_tbb13"].to_numpy(),
+        })
+    return per_step
