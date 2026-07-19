@@ -20,6 +20,9 @@ AR_COLUMNS = [
     "base_time", "target_time", "pixel_row", "pixel_col", "lat", "lon",
     "hour_sin", "hour_cos", "doy_sin", "doy_cos",
     "tbb_13_t", "tbb_13_tm1", "tbb_13_tm2",
+    # Fitur tetangga & anchor (fix #4) -- lihat pipeline/spatial_features.py
+    "tbb13_neighbor_mean", "tbb13_neighbor_diff",
+    "tbb_13_last_real_obs", "minutes_since_last_real_obs",
     "target_tbb_13",
 ]
 

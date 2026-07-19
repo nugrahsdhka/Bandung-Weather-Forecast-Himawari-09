@@ -10,6 +10,7 @@ import xarray as xr
 
 from ui.terminal_display import say_info, say_ok, say_error, say_skip, make_total_progress_bar
 from pipeline.netcdf_tools import extract_time_from_filename
+from pipeline.spatial_features import neighbor_feature_dict, anchor_feature_dict
 
 CHANNELS = [f"tbb_{i:02d}" for i in range(7, 17)]  # tbb_07 ... tbb_16
 TARGET_VAR = "tbb_13"
@@ -144,6 +145,15 @@ def build_interval_dataset(
         target_frame = frames[target_time]
         time_feats = _cyclical_time_features(t)
 
+        # Grid nilai tbb_13 "t" (observasi asli) untuk seluruh piksel pada
+        # base_time ini -- dipakai menghitung fitur tetangga. Di training,
+        # semua nilai ini adalah observasi ASLI (bukan hasil prediksi),
+        # persis seperti kondisi recursive forecasting di step pertama.
+        target_grid = {
+            (i, j): float(lag_frames[0][target_var][i, j])
+            for i in range(n_lat) for j in range(n_lon)
+        }
+
         for i in range(n_lat):
             for j in range(n_lon):
                 row = {
@@ -159,6 +169,18 @@ def build_interval_dataset(
                     for k, lf in enumerate(lag_frames):
                         suffix = "_t" if k == 0 else f"_tm{k}"
                         row[f"{ch}{suffix}"] = float(lf[ch][i, j])
+
+                # Fitur tetangga: rata-rata & selisih thd 4 piksel sekitarnya.
+                row.update(neighbor_feature_dict(target_grid, i, j, n_lat, n_lon))
+                # Fitur anchor: di training, base_time SELALU observasi asli,
+                # jadi last_real_obs = tbb_13_t & minutes_since = 0. Nilai ini
+                # baru akan berubah (>0) saat dipakai dalam rantai recursive
+                # forecasting sungguhan (lihat pipeline/inference.py).
+                row.update(anchor_feature_dict(
+                    last_real_obs_value=target_grid[(i, j)],
+                    minutes_since_last_real_obs=0,
+                ))
+
                 row[f"target_{target_var}"] = float(target_frame[target_var][i, j])
                 rows.append(row)
 

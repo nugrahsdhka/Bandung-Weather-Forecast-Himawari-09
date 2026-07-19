@@ -7,15 +7,19 @@ import numpy as np
 import pandas as pd
 
 from pipeline.delta_features import DELTA_COLUMNS, add_delta_features
+from pipeline.spatial_features import EXTRA_COLUMNS
 
-# Fitur delta/tren (tbb_13_delta_t, tbb_13_delta_tm1, tbb_13_accel) ditambahkan
-# di sini -- SATU tempat rujukan untuk seluruh pipeline (04, 05, 06), supaya
-# fiturnya konsisten di semua tahap training & inference.
+# Fitur delta/tren (tbb_13_delta_t, tbb_13_delta_tm1, tbb_13_accel), fitur
+# tetangga (tbb13_neighbor_mean/diff), dan fitur anchor observasi asli
+# (tbb_13_last_real_obs, minutes_since_last_real_obs) ditambahkan di sini --
+# SATU tempat rujukan untuk seluruh pipeline (03a, 04, 05, 06), supaya
+# fiturnya konsisten di semua tahap training & inference. Lihat catatan di
+# pipeline/spatial_features.py.
 FEATURE_COLUMNS = [
     "lat", "lon",
     "hour_sin", "hour_cos", "doy_sin", "doy_cos",
     "tbb_13_t", "tbb_13_tm1", "tbb_13_tm2",
-] + DELTA_COLUMNS
+] + DELTA_COLUMNS + EXTRA_COLUMNS
 TARGET_COLUMN = "target_tbb_13"
 
 
@@ -43,6 +47,35 @@ def get_feature_target(df):
     X = df[FEATURE_COLUMNS].copy()
     y = df[TARGET_COLUMN].copy()
     return X, y
+
+
+LAG_COLUMNS_FOR_NOISE = ["tbb_13_t", "tbb_13_tm1", "tbb_13_tm2"]
+
+
+def inject_lag_noise(X, noise_std, random_state=42):
+    """
+    Fix #3: tambahkan noise Gaussian ke kolom lag (tbb_13_t/tm1/tm2) SEBELUM
+    training, supaya model terbiasa dengan input yang "berisik" -- meniru
+    kondisi saat dipakai recursive (input di step > 1 adalah hasil prediksi
+    step sebelumnya, bukan observasi presisi).
+
+    `noise_std` idealnya ~seukuran MAE step-1 aktual model (lihat
+    models/training_summary.csv atau recursive_evaluation.csv setelah
+    training pertama). Kolom delta_t/delta_tm1/accel & neighbor_* TIDAK
+    di-recompute ulang dari lag yang sudah dinoise -- ini konsisten dengan
+    fakta bahwa saat recursive sungguhan, fitur turunan itu juga dihitung
+    dari window yang sama-sama sudah "kotor" (lihat inference.py), tapi di
+    training kita sengaja hanya menoise sinyal utamanya saja supaya
+    pengaruh noise tetap terukur & tidak dobel-hitung.
+    """
+    if noise_std <= 0:
+        return X
+    rng = np.random.default_rng(random_state)
+    X_noisy = X.copy()
+    for col in LAG_COLUMNS_FOR_NOISE:
+        if col in X_noisy.columns:
+            X_noisy[col] = X_noisy[col] + rng.normal(0, noise_std, size=len(X_noisy))
+    return X_noisy
 
 
 def train_svr(X_train, y_train, subsample_n=25000, random_state=42):
@@ -136,8 +169,16 @@ TRAINERS = {
 }
 
 
-def train_one_model(model_name, X_train, y_train):
-    """Dispatch ke fungsi training yang sesuai; return (model, scaler_or_None, detik_training)."""
+def train_one_model(model_name, X_train, y_train, noise_std=0.0):
+    """
+    Dispatch ke fungsi training yang sesuai; return (model, scaler_or_None, detik_training).
+
+    noise_std > 0 (fix #3): X_train di-inject noise Gaussian di kolom lag
+    sebelum training (lihat inject_lag_noise). Default 0 = perilaku lama
+    (tanpa noise), supaya tidak mengubah hasil training yang sudah ada
+    kecuali diaktifkan eksplisit.
+    """
+    X_train = inject_lag_noise(X_train, noise_std)
     start = time.time()
     if model_name == "svr":
         model, scaler = train_svr(X_train, y_train)
