@@ -55,6 +55,15 @@ class Config:
     # Interval prediksi (menit) yang dipakai di Tahap 3a, 3b, 4, 5.
     INTERVALS_MINUTES = [10, 30, 60]
 
+    # Fix #2: horizon (dalam kelipatan langkah 10 menit) yang dilatih dengan
+    # model DIRECT (target langsung dari observasi asli, bukan recursive).
+    # 1..9 = +10 menit s/d +90 menit -- sinyal spasial masih relatif kuat di
+    # rentang ini (lihat analisis korelasi spasial). Di luar horizon ini,
+    # pipeline tetap pakai recursive (03a/04/05/06) yang sudah ada, atau
+    # sambungan recursive dari titik akhir direct (lihat pipeline/inference.py
+    # run_direct_then_recursive_forecast).
+    DIRECT_HORIZON_STEPS = list(range(1, 10))  # 1..9
+
     @classmethod
     def validate(cls):
         """Validasi semua env var wajib terisi, dan laporkan nama-nama yang belum diisi."""
