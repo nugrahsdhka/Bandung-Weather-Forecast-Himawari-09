@@ -43,8 +43,8 @@ def chronological_split(df, test_frac=0.15, time_col="base_time"):
     return train_df, test_df, cutoff_time
 
 
-def get_feature_target(df):
-    X = df[FEATURE_COLUMNS].copy()
+def get_feature_target(df, feature_columns=None):
+    X = df[feature_columns or FEATURE_COLUMNS].copy()
     y = df[TARGET_COLUMN].copy()
     return X, y
 

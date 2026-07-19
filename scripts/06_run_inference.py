@@ -1,4 +1,16 @@
 # 06_run_inference.py
+# Menjalankan proses inference recursive forecasting selama 3 jam dan
+# menyimpan hasil prediksi untuk visualisasi.
+#
+# Setelah dibandingkan langsung (lihat tools/compare_forecast_runs.py, n=30
+# titik awal, 2x percobaan): mode "single" (1 model recursive terbaik, fix
+# #1 -- MAE + filter collapse_ratio) TERBUKTI lebih baik daripada
+# pendekatan direct multi-horizon di data asli. Fix #2 (direct) sudah
+# dihapus dari pipeline ini supaya lebih sederhana & fokus.
+#
+# Kalau nanti mau coba mode ensemble (fix #5, rata-rata xgboost+lightgbm+
+# catboost tiap langkah) lagi, fungsinya masih ada di
+# pipeline/inference.py -> run_recursive_forecast_ensemble().
 
 import os
 import json
@@ -11,11 +23,8 @@ from pipeline.model_training import load_ar_dataset
 from pipeline.ground_truth import build_ground_truth_lookup
 from pipeline.inference import (
     select_best_model,
-    select_best_direct_model,
     get_initial_windows,
     run_recursive_forecast,
-    run_recursive_forecast_ensemble,
-    run_direct_then_recursive_forecast,
     annotate_reliability,
     filter_forecast_by_interval,
 )
@@ -25,8 +34,6 @@ T0_STR = "2026-01-03 10:10:00"   # None = otomatis pakai base_time TERBARU di fe
 BASE_INTERVAL_MINUTES = 10
 HORIZON_MINUTES = 180
 DISPLAY_INTERVALS = [10, 30, 60]
-
-MODE = "hybrid_direct"   # "single" | "ensemble" | "hybrid_direct"
 # =================================
 
 
@@ -38,14 +45,6 @@ def load_single_model(models_dir, interval_minutes, model_name):
     return model, scaler
 
 
-def load_direct_model(models_dir, horizon_step, model_name):
-    h_dir = os.path.join(models_dir, "direct", f"h{horizon_step}")
-    model = joblib.load(os.path.join(h_dir, f"{model_name}.joblib"))
-    scaler_path = os.path.join(h_dir, f"{model_name}_scaler.joblib")
-    scaler = joblib.load(scaler_path) if os.path.exists(scaler_path) else None
-    return model, scaler
-
-
 def main():
     cfg = load_config()
     dataset_dir = os.path.join(cfg.PROJECT_ROOT, "dataset")
@@ -53,41 +52,19 @@ def main():
     root_output_dir = os.path.join(cfg.PROJECT_ROOT, "forecast_output")
     os.makedirs(root_output_dir, exist_ok=True)
 
-    banner(f"INFERENCE - FORECAST RECURSIVE 3 JAM (mode: {MODE})")
+    banner("INFERENCE - FORECAST RECURSIVE 3 JAM (mode: single)")
 
     say_info("Memuat dataset 10 menit untuk titik awal & ground-truth lookup ...")
     df10 = load_ar_dataset(os.path.join(dataset_dir, "features_10min_ar.csv"))
     lookup = build_ground_truth_lookup(df10)
     hr()
 
-    if MODE == "ensemble":
-        say_info("Mode ENSEMBLE aktif (fix #5): memuat semua model di cfg.MODEL_NAMES ...")
-        models_and_scalers = [load_single_model(models_dir, BASE_INTERVAL_MINUTES, m) for m in cfg.MODEL_NAMES]
-        model_name_tag = "ensemble"
-        say_ok(f"Model diikutkan: {', '.join(cfg.MODEL_NAMES)}")
-
-    elif MODE == "hybrid_direct":
-        say_info("Mode HYBRID_DIRECT aktif (fix #2): memilih model direct terbaik per horizon ...")
-        direct_models_by_h = {}
-        for h in cfg.DIRECT_HORIZON_STEPS:
-            best_direct_name = select_best_direct_model(os.path.join(models_dir, "direct"), h, cfg.MODEL_NAMES)
-            direct_models_by_h[h] = load_direct_model(models_dir, h, best_direct_name)
-            say_ok(f"  horizon +{h * BASE_INTERVAL_MINUTES:>3}min -> {best_direct_name}")
-
-        say_info("Memilih model RECURSIVE terbaik (fix #1) untuk menyambung step setelah fase direct ...")
-        best_model_name, model_table = select_best_model(models_dir, BASE_INTERVAL_MINUTES, cfg.MODEL_NAMES)
-        say_ok(f"Model recursive penyambung: {best_model_name}")
-        print(model_table.to_string())
-        recursive_model, recursive_scaler = load_single_model(models_dir, BASE_INTERVAL_MINUTES, best_model_name)
-        model_name_tag = f"hybrid_direct+{best_model_name}"
-
-    else:  # "single"
-        say_info("Memilih model terbaik (fix #1: MAE + filter collapse_ratio) berdasarkan Tahap 5 ...")
-        best_model_name, model_table = select_best_model(models_dir, BASE_INTERVAL_MINUTES, cfg.MODEL_NAMES)
-        say_ok(f"Model terpilih: {best_model_name}")
-        print(model_table.to_string())
-        model, scaler = load_single_model(models_dir, BASE_INTERVAL_MINUTES, best_model_name)
-        model_name_tag = best_model_name
+    say_info("Memilih model terbaik (fix #1: MAE + filter collapse_ratio) berdasarkan Tahap 5 ...")
+    best_model_name, model_table = select_best_model(models_dir, BASE_INTERVAL_MINUTES, cfg.MODEL_NAMES)
+    say_ok(f"Model terpilih: {best_model_name}")
+    print(model_table.to_string())
+    model, scaler = load_single_model(models_dir, BASE_INTERVAL_MINUTES, best_model_name)
+    model_name_tag = best_model_name
     hr()
 
     if T0_STR is None:
@@ -111,38 +88,16 @@ def main():
     say_ok(f"Window awal ditemukan untuk {len(windows)} pixel")
 
     n_steps = HORIZON_MINUTES // BASE_INTERVAL_MINUTES
-    say_info(f"Menjalankan forecast: {n_steps} langkah x {BASE_INTERVAL_MINUTES} menit ...")
+    say_info(f"Menjalankan forecast recursive: {n_steps} langkah x {BASE_INTERVAL_MINUTES} menit ...")
 
-    if MODE == "ensemble":
-        forecast_df = run_recursive_forecast_ensemble(
-            models_and_scalers, t0, windows,
-            n_steps=n_steps, interval_minutes=BASE_INTERVAL_MINUTES, lookup=lookup,
-        )
-    elif MODE == "hybrid_direct":
-        forecast_df = run_direct_then_recursive_forecast(
-            direct_models_by_h, recursive_model, recursive_scaler, t0, windows,
-            direct_horizon_steps=cfg.DIRECT_HORIZON_STEPS, n_steps=n_steps,
-            interval_minutes=BASE_INTERVAL_MINUTES, lookup=lookup,
-        )
-        n_direct = (forecast_df["source"] == "direct").sum()
-        n_cont = (forecast_df["source"] == "recursive_continuation").sum()
-        say_ok(f"Fase direct: {n_direct} baris  |  Fase recursive lanjutan: {n_cont} baris")
-    else:
-        forecast_df = run_recursive_forecast(
-            model, scaler, t0, windows,
-            n_steps=n_steps, interval_minutes=BASE_INTERVAL_MINUTES, lookup=lookup,
-        )
+    forecast_df = run_recursive_forecast(
+        model, scaler, t0, windows,
+        n_steps=n_steps, interval_minutes=BASE_INTERVAL_MINUTES, lookup=lookup,
+    )
     say_ok(f"Forecast selesai: {len(forecast_df)} baris ({n_steps} langkah x {len(windows)} pixel)")
 
     # Fix #6: tandai step mana yang masih "reliable" berdasarkan collapse_ratio di Tahap 5.
-    # Untuk hybrid_direct, dipakai metrik recursive_model (yang dipakai fase sambungan) --
-    # fase direct-nya sendiri tidak butuh flag ini karena tidak ada compounding error.
-    reliability_model_tag = best_model_name if MODE == "hybrid_direct" else model_name_tag
-    forecast_df = annotate_reliability(forecast_df, models_dir, BASE_INTERVAL_MINUTES, reliability_model_tag)
-    if MODE == "hybrid_direct":
-        # Step-step fase direct selalu ditandai reliable (tidak ada compounding error).
-        forecast_df.loc[forecast_df["source"] == "direct", "reliable"] = True
-
+    forecast_df = annotate_reliability(forecast_df, models_dir, BASE_INTERVAL_MINUTES, model_name_tag)
     n_unreliable = (~forecast_df["reliable"]).sum()
     if n_unreliable > 0:
         first_unreliable_step = int(forecast_df.loc[~forecast_df["reliable"], "step"].min())
@@ -168,7 +123,6 @@ def main():
     state = {
         "t0": t0.strftime("%Y-%m-%d %H:%M:%S"),
         "t0_tag": t0_tag,
-        "mode": MODE,
         "model_name": model_name_tag,
         "base_interval_minutes": BASE_INTERVAL_MINUTES,
         "horizon_minutes": HORIZON_MINUTES,
