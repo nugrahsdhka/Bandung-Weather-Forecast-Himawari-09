@@ -1,9 +1,5 @@
 # 05_recursive_evaluation.py
-# Melakukan evaluasi recursive multi-step forecasting terhadap seluruh model
-# machine learning pada horizon prediksi 3 jam. Sejak fix #1, evaluasi
-# dilakukan joint (semua piksel bersamaan per titik awal t0) sehingga bisa
-# menghitung metrik anti-collapse (spatial_collapse_ratio, spatial_correlation)
-# selain MAE -- MAE saja bisa "tertipu" oleh model yang kolaps ke rata-rata.
+# Melakukan evaluasi joint recursive multi-step forecasting seluruh model machine learning pada horizon prediksi 3 jam untuk menghitung MAE serta metrik anti-collapse (spatial_collapse_ratio dan spatial_correlation), karena MAE saja dapat menipu ketika model kolaps ke nilai rata-rata.
 
 import os
 import joblib
