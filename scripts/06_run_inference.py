@@ -1,16 +1,5 @@
 # 06_run_inference.py
-# Menjalankan proses inference recursive forecasting selama 3 jam dan
-# menyimpan hasil prediksi untuk visualisasi.
-#
-# Setelah dibandingkan langsung (lihat tools/compare_forecast_runs.py, n=30
-# titik awal, 2x percobaan): mode "single" (1 model recursive terbaik, fix
-# #1 -- MAE + filter collapse_ratio) TERBUKTI lebih baik daripada
-# pendekatan direct multi-horizon di data asli. Fix #2 (direct) sudah
-# dihapus dari pipeline ini supaya lebih sederhana & fokus.
-#
-# Kalau nanti mau coba mode ensemble (fix #5, rata-rata xgboost+lightgbm+
-# catboost tiap langkah) lagi, fungsinya masih ada di
-# pipeline/inference.py -> run_recursive_forecast_ensemble().
+# Menjalankan inference recursive forecasting selama 3 jam dan menyimpan hasil prediksi untuk visualisasi menggunakan mode single (1 model recursive terbaik berdasarkan MAE + filter collapse_ratio), yang terbukti mengungguli pendekatan direct multi-horizon pada data asli; mode ensemble tetap tersedia di pipeline/inference.py jika ingin dievaluasi kembali.
 
 import os
 import json
