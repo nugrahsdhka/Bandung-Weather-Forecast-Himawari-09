@@ -55,5 +55,6 @@ forecast_output/
 # Visualization Output
 visualizations/
 
-# Test
+# Utils
 test_file.txt
+graphify-out
